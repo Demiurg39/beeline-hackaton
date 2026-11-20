@@ -8,7 +8,7 @@ import csv
 import re
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
 
 import msgspec
@@ -96,7 +96,9 @@ def _read_file_bytes(file_path: Path) -> bytes:
         ) from exc
 
 
-def _validate_non_negative_decimal(value: Decimal, config_file: str, field_name: str) -> None:
+def _validate_non_negative_decimal(
+    value: Decimal, config_file: str, field_name: str
+) -> None:
     """Ensure a Decimal value in JSON configuration is finite and >= 0."""
     if not value.is_finite() or value < _ZERO_DECIMAL:
         reason = f"Field '{field_name}' must be finite and >= 0, got {value}"
@@ -129,8 +131,12 @@ def _validate_tariffs_config(config: TariffsConfig, config_file: str) -> set[Tar
             )
         seen_tariff_ids.add(tariff.id)
 
-        _validate_non_negative_decimal(tariff.fee, config_file, f"tariff '{tariff.id}'.fee")
-        _validate_non_negative_decimal(tariff.gb, config_file, f"tariff '{tariff.id}'.gb")
+        _validate_non_negative_decimal(
+            tariff.fee, config_file, f"tariff '{tariff.id}'.fee"
+        )
+        _validate_non_negative_decimal(
+            tariff.gb, config_file, f"tariff '{tariff.id}'.gb"
+        )
 
         if tariff.minutes < 0 or tariff.sms < 0:
             reason = f"Tariff '{tariff.id}' minutes and sms must be >= 0"
@@ -158,7 +164,9 @@ def _validate_addons(addons: tuple[Addon, ...], config_file: str) -> None:
             )
         seen_addon_ids.add(addon.id)
 
-        _validate_non_negative_decimal(addon.fee, config_file, f"addon '{addon.id}'.fee")
+        _validate_non_negative_decimal(
+            addon.fee, config_file, f"addon '{addon.id}'.fee"
+        )
         _validate_non_negative_decimal(addon.gb, config_file, f"addon '{addon.id}'.gb")
 
         if addon.minutes < 0 or addon.sms < 0:
@@ -312,7 +320,9 @@ def calc_call_minutes(duration_sec: Decimal) -> int:
     """Round a single call duration in seconds up to whole minutes (0 -> 0)."""
     if duration_sec == _ZERO_DECIMAL:
         return 0
-    return int((duration_sec / SECONDS_PER_MINUTE).to_integral_value(rounding=ROUND_CEILING))
+    return int(
+        (duration_sec / SECONDS_PER_MINUTE).to_integral_value(rounding=ROUND_CEILING)
+    )
 
 
 def split_day_night_gb(
@@ -362,7 +372,9 @@ def _validate_months_tuple(months: tuple[str, ...]) -> None:
         seen.add(month)
 
 
-def _parse_row_date(raw_date: str | None, row_number: int, months_set: set[str]) -> tuple[datetime, str]:
+def _parse_row_date(
+    raw_date: str | None, row_number: int, months_set: set[str]
+) -> tuple[datetime, str]:
     """Validate ISO 8601 naive datetime string and return (dt, 'YYYY-MM')."""
     if raw_date is None or not raw_date.strip():
         raise CsvRowValidationError(
@@ -421,7 +433,9 @@ def _parse_row_type(raw_type: str | None, row_number: int) -> str:
     return cleaned
 
 
-def _parse_row_amount(raw_amount: str | None, usage_type: str, row_number: int) -> Decimal:
+def _parse_row_amount(
+    raw_amount: str | None, usage_type: str, row_number: int
+) -> Decimal:
     """Validate finite non-negative Decimal amount (and integer constraint for SMS)."""
     if raw_amount is None or not raw_amount.strip():
         raise CsvRowValidationError(
@@ -465,7 +479,9 @@ def _parse_row_amount(raw_amount: str | None, usage_type: str, row_number: int) 
     return amount
 
 
-def _parse_row_duration_sec(raw_duration: str | None, usage_type: str, row_number: int) -> int:
+def _parse_row_duration_sec(
+    raw_duration: str | None, usage_type: str, row_number: int
+) -> int:
     """Validate optional duration_sec column (integer >= 0, must be 0 for call and sms)."""
     if raw_duration is None or not raw_duration.strip():
         return 0
@@ -568,7 +584,9 @@ def parse_usage_csv(
                 )
 
             for row_number, row in enumerate(reader, start=2):
-                start_dt, event_month = _parse_row_date(row.get("date"), row_number, months_set)
+                start_dt, event_month = _parse_row_date(
+                    row.get("date"), row_number, months_set
+                )
                 usage_type = _parse_row_type(row.get("type"), row_number)
                 amount = _parse_row_amount(row.get("amount"), usage_type, row_number)
                 duration_sec = _parse_row_duration_sec(
@@ -595,7 +613,9 @@ def parse_usage_csv(
                     if is_roaming:
                         acc.roaming_gb += amount
                     else:
-                        day_gb, night_gb = split_day_night_gb(start_dt, duration_sec, amount)
+                        day_gb, night_gb = split_day_night_gb(
+                            start_dt, duration_sec, amount
+                        )
                         acc.home_day_gb += day_gb
                         acc.home_night_gb += night_gb
 
