@@ -115,15 +115,15 @@ def evaluate_recommendations(
     comparison_items: list[TariffComparisonItem] = []
 
     for tariff in tariffs_config.tariffs:
-        is_same_tarif = tariff.id == subscriber.current_tariff_id
-        switch_fee = _ZERO_DECIMAL if is_same_tarif else SWITCH_FEE_KGS
+        is_same_tariff = tariff.id == subscriber.current_tariff_id
+        switch_fee = _ZERO_DECIMAL if is_same_tariff else SWITCH_FEE_KGS
 
         best_for_tariff: CandidateTuple | None = None
         best_for_tariff_key: tuple[Decimal, int, list[AddonId]] | None = None
 
         for combo in addon_combos:
             addon_ids: list[AddonId] = [addon.id for addon in combo]
-            is_stay_option = is_same_tarif and len(addon_ids) == 0
+            is_stay_option = is_same_tariff and len(addon_ids) == 0
 
             if is_stay_option:
                 avg_monthly_cost = baseline_avg_monthly
@@ -158,7 +158,7 @@ def evaluate_recommendations(
                 best_for_tariff = candidate
 
             if _is_eligible_option(
-                is_same_tariff=is_same_tarif,
+                is_same_tariff=is_same_tariff,
                 addon_count=len(addon_ids),
                 raw_monthly_savings=raw_monthly_savings,
                 raw_net_savings_3m=raw_net_savings_3m,
