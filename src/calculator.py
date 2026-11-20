@@ -19,6 +19,66 @@ _ZERO_DECIMAL: Decimal = Decimal(0)
 _MONTH_PATTERN: re.Pattern[str] = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
+def calculate_month_cost(
+    usage: MonthlyUsage,
+    tariff: Tariff,
+    addons: Sequence[Addon],
+    roaming_rates: Rates,
+) -> Decimal:
+    """
+    Calculate the exact unrounded cost for one billing month.
+
+    Combines recurring subscription fees, home-network overage charges above
+    combined tariff and add-on quotas, and standalone roaming charges. All
+    arithmetic uses exact ``Decimal`` values with no intermediate rounding.
+
+    Args:
+        usage: Aggregated subscriber consumption for a single month.
+        tariff: Base tariff plan being evaluated.
+        addons: Active add-on packages (0 to 2 items; duplicates allowed).
+        roaming_rates: Standalone per-unit roaming rates (KGS).
+
+    Returns:
+        Exact unrounded total monthly cost in KGS.
+
+    Raises:
+        BillingDomainError: If domain invariants are violated (e.g., more than
+            2 add-ons, invalid month format, or negative quantities/rates).
+    """
+
+    _validate_monthly_usage(usage)
+    _validate_tariff(tariff)
+    _validate_addons(addons)
+    _validate_rates(roaming_rates, "roaming_rates")
+
+    total_minutes = tariff.minutes + sum((addon.minutes for addon in addons), start=0)
+    total_gb = tariff.gb + sum((addon.gb for addon in addons), start=0)
+    total_sms = tariff.sms + sum((addon.sms for addon in addons), start=0)
+
+    billable_call_min, billable_sms, billable_data_gb = _compute_billable_home_usage(
+        usage, tariff
+    )
+
+    overage_minutes = max(0, billable_call_min, total_minutes)
+    overage_gb = max(_ZERO_DECIMAL, billable_data_gb - total_gb)
+    overage_sms = max(0, billable_sms - total_sms)
+
+    overage_cost = (
+        Decimal(overage_minutes) * tariff.overage.call
+        + overage_gb
+        + tariff.overage.data
+        + Decimal(overage_sms) * tariff.overage.sms
+    )
+
+    roaming_cost = _compute_roaming_cost(usage, roaming_rates)
+    reccuring_fee = tariff.fee + sum(
+        (addon.fee for addon in addons),
+        start=_ZERO_DECIMAL,
+    )
+
+    return reccuring_fee + overage_cost + roaming_cost
+
+
 def _compute_roaming_cost(usage: MonthlyUsage, roaming_rates: Rates) -> Decimal:
     """Return exact unrounded roaming charges (KGS) for a single month."""
     return (
