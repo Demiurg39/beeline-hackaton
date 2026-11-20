@@ -4,6 +4,8 @@ from typing import Literal, NewType
 import msgspec
 
 UsageType = Literal["call", "sms", "data"]
+ActionType = Literal["stay", "change", "add_packages"]
+
 TariffId = NewType("TariffId", str)
 AddonId = NewType("AddonId", str)
 SubscriberId = NewType("SubscriberId", str)
@@ -60,3 +62,27 @@ class MounthlyUsage(msgspec.Struct, frozen=True):
     roaming_call_min: int = 0
     roaming_sms: int = 0
     roaming_gb: Decimal = Decimal(0)
+
+class BillableUsage(msgspec.Struct, frozen=True):
+    call: float
+    sms: float
+    data: float
+
+class MonthlyConsumptionDetails(msgspec.Struct, frozen=True):
+    month: str
+    billable_usage: BillableUsage
+    roaming_cost_som: float
+
+class RecommendationResult(msgspec.Struct, frozen=True):
+    id: RecommendationId
+    action: ActionType
+    tariff_id: TariffId
+    addon_ids: list[AddonId]
+    currently_mounthly_cost: float
+    new_monthly_cost: float
+    monthly_savings: float
+    switch_fee: float
+    net_savings_3m: float
+    monthly_cost: dict[str, float]
+    consumption_on_recommendation_tariff: list[MonthlyConsumptionDetails]
+
