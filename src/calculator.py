@@ -5,12 +5,11 @@ Created by Amir (demiurg39) Chiryagov
 Pure billing calculation service for single tariff and add-on options.
 """
 
+import re
 from collections.abc import Sequence
 from decimal import Decimal
 
-import re
-
-from src.models import Addon, Rates, Tariff, MonthlyUsage
+from src.models import Addon, MonthlyUsage, Rates, Tariff
 
 BILLING_PERIOD_MONTHS: int = 3
 MAX_ADDONS_PER_OPTION: int = 2
