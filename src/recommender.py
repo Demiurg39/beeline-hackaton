@@ -37,6 +37,12 @@ _ZERO_DECIMAL: Decimal = Decimal(0)
 _PERIOD_DECIMAL: Decimal = Decimal(BILLING_PERIOD_MONTHS)
 
 
+__all__ = [
+    "evaluate_recommendations",
+    "recommend_tariff",
+]
+
+
 def evaluate_recommendations(
     subscriber: SubscriberProfile,
     monthly_usages: Sequence[MonthlyUsage],
