@@ -7,14 +7,21 @@ Pure billing calculation service for single tariff and add-on options.
 
 import re
 from collections.abc import Sequence
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
-from src.exceptions import BillingDomainError
-from src.models import Addon, MonthlyUsage, Rates, Tariff
+from src.models import (
+    Addon,
+    BillableUsage,
+    MonthlyConsumptionDetails,
+    MonthlyUsage,
+    Rates,
+    Tariff,
+)
 
 BILLING_PERIOD_MONTHS: int = 3
 MAX_ADDONS_PER_OPTION: int = 2
 
+_MONEY_QUANTUM: Decimal = Decimal("0.01")
 _ZERO_DECIMAL: Decimal = Decimal(0)
 _MONTH_PATTERN: re.Pattern[str] = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -121,6 +128,59 @@ def calculate_option_costs(
     avg_monthly_cost = total_cost / Decimal(BILLING_PERIOD_MONTHS)
 
     return avg_monthly_cost, monthly_costs
+
+
+def build_consumption_details(
+    monthly_usages: Sequence[MonthlyUsage],
+    tariff: Tariff,
+    roaming_rates: Rates,
+) -> list[MonthlyConsumptionDetails]:
+    """
+    Build per-month billable usage and roaming cost details for a tariff.
+
+    Intended to be called once by the recommender for the winning tariff option.
+    Applies ``night_unlimited`` exclusion to daytime/nighttime data and rounds
+    each month's ``roaming_cost_som`` to 0.01 KGS using ``ROUND_HALF_UP``.
+
+    Args:
+        monthly_usages: Subscriber consumption records for 3 distinct months.
+        tariff: Selected tariff plan whose ``night_unlimited`` rule applies.
+        roaming_rates: Standalone per-unit roaming rates (KGS).
+
+    Returns:
+        Ordered list of ``MonthlyConsumptionDetails`` matching ``monthly_usages``.
+
+    Raises:
+        BillingDomainError: If ``monthly_usages`` or rates violate domain rules.
+    """
+
+    _validate_billing_period(monthly_usages)
+    _validate_tariff(tariff)
+    _validate_rates(roaming_rates, "roaming_rates")
+
+    details: list[MonthlyConsumptionDetails] = []
+    for usage in monthly_usages:
+        billable_call_min, billable_sms, billable_data_gb = (
+            _compute_billable_home_usage(usage, tariff)
+        )
+        roaming_cost = _compute_roaming_cost(usage, roaming_rates)
+        roaming_cost_rounded = float(
+            roaming_cost.quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+        )
+
+        details.append(
+            MonthlyConsumptionDetails(
+                month=usage.month,
+                billable_usage=BillableUsage(
+                    call=float(billable_call_min),
+                    sms=float(billable_sms),
+                    data=float(billable_data_gb),
+                ),
+                roaming_cost_som=roaming_cost_rounded,
+            )
+        )
+
+    return details
 
 
 def _compute_roaming_cost(usage: MonthlyUsage, roaming_rates: Rates) -> Decimal:
