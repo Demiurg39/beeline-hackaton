@@ -239,6 +239,39 @@ def evaluate_recommendations(
     return recommendation, comparison_items
 
 
+def recommend_tariff(
+    subscriber: SubscriberProfile,
+    monthly_usages: Sequence[MonthlyUsage],
+    tariffs_config: TariffsConfig,
+    addons: Sequence[Addon],
+) -> RecommendationResult:
+    """
+    Return only the core ``RecommendationResult`` for benchmark evaluation.
+
+    Convenience wrapper around ``evaluate_recommendations`` used by the public
+    ``recommend(usage_file)`` entry point.
+
+    Args:
+        subscriber: Subscriber profile specifying ``id``, ``current_tariff_id``,
+            and the 3 billing months.
+        monthly_usages: Aggregated consumption records for the subscriber's
+            3 billing months.
+        tariffs_config: Catalog containing available tariffs and roaming rates.
+        addons: Catalog of available monthly add-on packages.
+
+    Returns:
+        ``RecommendationResult`` matching the ``expected.json`` schema.
+    """
+
+    recommendation, _ = evaluate_recommendations(
+        subscriber=subscriber,
+        monthly_usages=monthly_usages,
+        tariffs_config=tariffs_config,
+        addons=addons,
+    )
+    return recommendation
+
+
 def _round_money(value: Decimal) -> float:
     """Round an exact ``Decimal`` amount to 0.01 KGS using ``ROUND_HALF_UP``."""
     return float(value.quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP))
