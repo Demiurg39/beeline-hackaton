@@ -30,8 +30,12 @@ class TariffCalculatorError(Exception):
         """Initialize the base exception with message, code, HTTP status, and details."""
         super().__init__(message)
         self.message: str = message
-        self.error_code: str = error_code if error_code is not None else self.default_error_code
-        self.status_code: int = status_code if status_code is not None else self.default_status_code
+        self.error_code: str = (
+            error_code if error_code is not None else self.default_error_code
+        )
+        self.status_code: int = (
+            status_code if status_code is not None else self.default_status_code
+        )
         self.details: dict[str, Any] = dict(details) if details is not None else {}
 
     def to_dict(self) -> dict[str, Any]:
