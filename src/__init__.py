@@ -6,10 +6,20 @@ Public package entry points for the Beeline tariff recommendation engine.
 """
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
+
+import msgspec
 
 from src.exceptions import BillingDomainError, SubscriberNotFoundError
-from src.models import SubscriberId, SubscriberProfile, TariffId
-from src.parser import resolve_subscriber
+from src.models import (
+    RecommendationResult,
+    SubscriberId,
+    SubscriberProfile,
+    TariffComparisonItem,
+    TariffId,
+)
+from src.parser import load_catalog, parse_usage_csv, resolve_subscriber
+from src.recommender import evaluate_recommendations
 
 _DEFAULT_DATA_DIR: Path = Path(__file__).resolve().parent.parent / "data"
 _CATALOG_MARKER_FILES: tuple[str, str, str] = (
@@ -17,6 +27,87 @@ _CATALOG_MARKER_FILES: tuple[str, str, str] = (
     "addons.json",
     "subscribers.json",
 )
+
+
+def evaluate_usage_file(
+    usage_file: str | Path,
+    *,
+    data_dir: str | Path | None = None,
+    current_tariff_id: str | TariffId | None = None,
+    months: Sequence[str] | None = None,
+    subscriber_id: str | SubscriberId | None = None,
+) -> tuple[RecommendationResult, list[TariffComparisonItem]]:
+    """
+    Run the full billing pipeline and return typed recommendation and comparison models.
+
+    Args:
+        usage_file: Path to the subscriber's usage CSV file.
+        data_dir: Optional directory containing ``tariffs.json``, ``addons.json``,
+            and ``subscribers.json``. Defaults to the directory of ``usage_file``
+            if catalog files exist there, otherwise the project ``data/`` directory.
+        current_tariff_id: Optional override for the subscriber's current tariff ID.
+        months: Optional override for the 3 billing months (``"YYYY-MM"``).
+        subscriber_id: Optional subscriber identifier override.
+
+    Returns:
+        A tuple ``(recommendation, comparison)`` with typed ``msgspec`` structs.
+    """
+
+    usage_path = Path(usage_file)
+    catalog_dir = _resolve_catalog_dir(usage_path, data_dir)
+    tariffs_config, addons, subscribers = load_catalog(catalog_dir)
+
+    subscriber = _resolve_target_subscriber(
+        usage_path=usage_path,
+        subscribers=subscribers,
+        current_tariff_id=current_tariff_id,
+        months=months,
+        subscriber_id=subscriber_id,
+    )
+    monthly_usages = parse_usage_csv(usage_path, subscriber.months)
+
+    return evaluate_recommendations(
+        subscriber=subscriber,
+        monthly_usages=monthly_usages,
+        tariffs_config=tariffs_config,
+        addons=addons,
+    )
+
+
+def recommend(
+    usage_file: str | Path,
+    *,
+    data_dir: str | Path | None = None,
+    current_tariff_id: str | TariffId | None = None,
+    months: Sequence[str] | None = None,
+    subscriber_id: str | SubscriberId | None = None,
+) -> dict[str, Any]:
+    """
+    Evaluate a subscriber's usage file and return a JSON-compatible recommendation dict.
+
+    Serves as the primary entry point for automated benchmark grading
+    (``recommend(usage_file)``) as well as programmatic and API callers.
+
+    Args:
+        usage_file: Path to the subscriber's usage CSV file.
+        data_dir: Optional directory containing ``tariffs.json``, ``addons.json``,
+            and ``subscribers.json``.
+        current_tariff_id: Optional override for the subscriber's current tariff ID.
+        months: Optional override for the 3 billing months (``"YYYY-MM"``).
+        subscriber_id: Optional subscriber identifier override.
+
+    Returns:
+        Dictionary matching the ``expected.json`` schema with rounded monetary
+        values and per-month billable consumption details.
+    """
+    recommendation, _ = evaluate_usage_file(
+        usage_file=usage_file,
+        data_dir=data_dir,
+        current_tariff_id=current_tariff_id,
+        months=months,
+        subscriber_id=subscriber_id,
+    )
+    return msgspec.to_builtins(recommendation)
 
 
 def _resolve_catalog_dir(usage_path: Path, data_dir: str | Path | None) -> Path:
