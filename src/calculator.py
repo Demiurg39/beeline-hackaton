@@ -59,21 +59,20 @@ def calculate_month_cost(
     _validate_rates(roaming_rates, "roaming_rates")
 
     total_minutes = tariff.minutes + sum((addon.minutes for addon in addons), start=0)
-    total_gb = tariff.gb + sum((addon.gb for addon in addons), start=0)
+    total_gb = tariff.gb + sum((addon.gb for addon in addons), start=_ZERO_DECIMAL)
     total_sms = tariff.sms + sum((addon.sms for addon in addons), start=0)
 
     billable_call_min, billable_sms, billable_data_gb = _compute_billable_home_usage(
         usage, tariff
     )
 
-    overage_minutes = max(0, billable_call_min, total_minutes)
+    overage_minutes = max(0, billable_call_min - total_minutes)
     overage_gb = max(_ZERO_DECIMAL, billable_data_gb - total_gb)
     overage_sms = max(0, billable_sms - total_sms)
 
     overage_cost = (
         Decimal(overage_minutes) * tariff.overage.call
-        + overage_gb
-        + tariff.overage.data
+        + overage_gb * tariff.overage.data
         + Decimal(overage_sms) * tariff.overage.sms
     )
 
