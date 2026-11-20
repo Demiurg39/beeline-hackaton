@@ -7,7 +7,6 @@ Catalog loader and CSV usage parser with strict validation and Decimal arithmeti
 
 import csv
 import re
-from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from pathlib import Path
@@ -63,17 +62,27 @@ class _SubscribersEnvelope(msgspec.Struct, frozen=True):
     subscribers: tuple[SubscriberProfile, ...]
 
 
-@dataclass
 class _MonthlyAccumulator:
     """Mutable per-month counters used while streaming CSV rows."""
 
-    home_call_min: int = 0
-    home_sms: int = 0
-    home_day_gb: Decimal = _ZERO_DECIMAL
-    home_night_gb: Decimal = _ZERO_DECIMAL
-    roaming_call_min: int = 0
-    roaming_sms: int = 0
-    roaming_gb: Decimal = _ZERO_DECIMAL
+    __slots__ = (
+        "home_call_min",
+        "home_sms",
+        "home_day_gb",
+        "home_night_gb",
+        "roaming_call_min",
+        "roaming_sms",
+        "roaming_gb",
+    )
+
+    def __init__(self) -> None:
+        self.home_call_min: int = 0
+        self.home_sms: int = 0
+        self.home_day_gb: Decimal = _ZERO_DECIMAL
+        self.home_night_gb: Decimal = _ZERO_DECIMAL
+        self.roaming_call_min: int = 0
+        self.roaming_sms: int = 0
+        self.roaming_gb: Decimal = _ZERO_DECIMAL
 
     def to_monthly_usage(self, month: str) -> MonthlyUsage:
         """Convert accumulated counters into an immutable MonthlyUsage struct."""
@@ -98,10 +107,16 @@ def _read_file_bytes(file_path: Path) -> bytes:
         )
     try:
         return file_path.read_bytes()
-    except OSError as exc:
+    except FileNotFoundError as exc:
         raise DataFileNotFoundError(
-            f"Unable to read file '{file_path}': {exc}",
+            f"Required file not found: {file_path}",
             file_path=str(file_path),
+        ) from exc
+    except OSError as exc:
+        raise ConfigurationError(
+            f"Unable to read file '{file_path}': {exc}",
+            config_file=str(file_path),
+            reason=f"I/O error: {exc}",
         ) from exc
 
 
@@ -125,7 +140,9 @@ def _validate_rates(rates: Rates, config_file: str, label: str) -> None:
     _validate_non_negative_decimal(rates.sms, config_file, f"{label}.sms")
 
 
-def _validate_tariffs_config(config: TariffsConfig, config_file: str) -> set[TariffId]:
+def _validate_tariffs_config(
+    config: TariffsConfig, config_file: str
+) -> set[TariffId]:
     """Validate tariffs.json schema semantics and return known tariff IDs."""
     _validate_rates(config.roaming_rates, config_file, "roaming_rates")
 
@@ -176,7 +193,9 @@ def _validate_addons(addons: tuple[Addon, ...], config_file: str) -> None:
         _validate_non_negative_decimal(
             addon.fee, config_file, f"addon '{addon.id}'.fee"
         )
-        _validate_non_negative_decimal(addon.gb, config_file, f"addon '{addon.id}'.gb")
+        _validate_non_negative_decimal(
+            addon.gb, config_file, f"addon '{addon.id}'.gb"
+        )
 
         if addon.minutes < 0 or addon.sms < 0:
             reason = f"Addon '{addon.id}' minutes and sms must be >= 0"
@@ -216,8 +235,8 @@ def _validate_subscribers(
 
         if len(profile.months) != BILLING_PERIOD_MONTHS:
             reason = (
-                f"Subscriber '{profile.id}' must define exactly {BILLING_PERIOD_MONTHS} "
-                f"billing months, got {len(profile.months)}"
+                f"Subscriber '{profile.id}' must define exactly "
+                f"{BILLING_PERIOD_MONTHS} billing months, got {len(profile.months)}"
             )
             raise ConfigurationError(
                 f"Invalid configuration in '{config_file}': {reason}",
@@ -339,7 +358,7 @@ def split_day_night_gb(
     duration_sec: int,
     amount_gb: Decimal,
 ) -> tuple[Decimal, Decimal]:
-    """Split home data volume into (day_gb, night_gb) for the [01:00:00, 07:00:00) window."""
+    """Split home data volume into (day_gb, night_gb) for [01:00:00, 07:00:00)."""
     if duration_sec == 0:
         if _NIGHT_START_TIME <= start_dt.time() < _NIGHT_END_TIME:
             return _ZERO_DECIMAL, amount_gb
@@ -367,7 +386,10 @@ def split_day_night_gb(
 def _validate_months_tuple(months: tuple[str, ...]) -> None:
     """Validate that months contains exactly 3 distinct valid YYYY-MM strings."""
     if len(months) != BILLING_PERIOD_MONTHS:
-        reason = f"Expected exactly {BILLING_PERIOD_MONTHS} billing months, got {len(months)}"
+        reason = (
+            f"Expected exactly {BILLING_PERIOD_MONTHS} billing months, "
+            f"got {len(months)}"
+        )
         raise BillingDomainError(reason, reason=reason)
 
     seen: set[str] = set()
@@ -395,6 +417,20 @@ def _parse_row_date(
         )
 
     cleaned = raw_date.strip()
+    # Enforce date+time: 'YYYY-MM-DDTHH:MM[:SS[.ffffff]]' or with a space.
+    # This rejects date-only, compact (basic) ISO forms, week dates, etc.,
+    # even though datetime.fromisoformat() would accept several of them.
+    if len(cleaned) < 16 or cleaned[10] not in ("T", " "):
+        raise CsvRowValidationError(
+            f"Row {row_number}: 'date' must include a time component, got '{raw_date}'",
+            row_number=row_number,
+            column="date",
+            value=raw_date,
+            reason=(
+                "Expected 'YYYY-MM-DDTHH:MM[:SS]' or 'YYYY-MM-DD HH:MM[:SS]'"
+            ),
+        )
+
     try:
         dt = datetime.fromisoformat(cleaned)
     except ValueError as exc:
@@ -412,7 +448,10 @@ def _parse_row_date(
             row_number=row_number,
             column="date",
             value=raw_date,
-            reason="Timezone-aware datetime is not allowed; expected naive Asia/Bishkek time",
+            reason=(
+                "Timezone-aware datetime is not allowed; "
+                "expected naive Asia/Bishkek time"
+            ),
         )
 
     event_month = f"{dt.year:04d}-{dt.month:02d}"
@@ -491,7 +530,7 @@ def _parse_row_amount(
 def _parse_row_duration_sec(
     raw_duration: str | None, usage_type: str, row_number: int
 ) -> int:
-    """Validate optional duration_sec column (integer >= 0, must be 0 for call and sms)."""
+    """Validate optional duration_sec (integer >= 0; must be 0 for call and sms)."""
     if raw_duration is None or not raw_duration.strip():
         return 0
 
@@ -513,7 +552,8 @@ def _parse_row_duration_sec(
         or duration_dec != duration_dec.to_integral_value()
     ):
         raise CsvRowValidationError(
-            f"Row {row_number}: duration_sec must be a non-negative integer, got '{raw_duration}'",
+            f"Row {row_number}: duration_sec must be a non-negative integer, "
+            f"got '{raw_duration}'",
             row_number=row_number,
             column="duration_sec",
             value=raw_duration,
@@ -523,7 +563,8 @@ def _parse_row_duration_sec(
     duration_int = int(duration_dec)
     if usage_type in {"call", "sms"} and duration_int != 0:
         raise CsvRowValidationError(
-            f"Row {row_number}: duration_sec must be 0 for '{usage_type}', got {duration_int}",
+            f"Row {row_number}: duration_sec must be 0 for '{usage_type}', "
+            f"got {duration_int}",
             row_number=row_number,
             column="duration_sec",
             value=raw_duration,
@@ -635,10 +676,19 @@ def parse_usage_csv(
             missing_columns=None,
             reason=f"UTF-8 decoding failed: {exc}",
         ) from exc
-    except OSError as exc:
+    except FileNotFoundError as exc:
         raise DataFileNotFoundError(
+            f"Usage CSV file not found: {usage_file}",
+            file_path=str(usage_file),
+        ) from exc
+    except OSError as exc:
+        # Any other I/O error (permission, disk, etc.) must not be reported
+        # as a missing file — surface it as a format error instead.
+        raise CsvFormatError(
             f"Unable to read usage CSV file '{usage_file}': {exc}",
             file_path=str(usage_file),
+            missing_columns=None,
+            reason=f"I/O error while reading CSV: {exc}",
         ) from exc
 
     return [accumulators[month].to_monthly_usage(month) for month in months]
