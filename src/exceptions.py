@@ -1,4 +1,9 @@
-"""Custom exceptions hierarchy for the tariff calculator."""
+"""
+exceptions.py
+Created by Aman (Montaggg) Ismailov
+
+Custom exceptions hierarchy for the tariff calculator.
+"""
 
 from typing import Any
 
