@@ -86,3 +86,15 @@ class RecommendationResult(msgspec.Struct, frozen=True):
     monthly_cost: dict[str, float]
     consumption_on_recommendation_tariff: list[MonthlyConsumptionDetails]
 
+class TariffComparisonItem(msgspec.Struct, frozen=True):
+    tariff_id: TariffId
+    tariff_name: str
+    addon_ids: list[AddonId]
+    avg_monthly_cost: float
+    net_savings_3m: float
+    is_profitable: bool
+
+class ApiRecommendationResponse(msgspec.Struct, frozen=True):
+    recommendation: RecommendationResult
+    comparison: list[TariffComparisonItem]
+    llm_explanation: str | None = None
