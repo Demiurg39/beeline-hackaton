@@ -3,6 +3,7 @@ from typing import Literal, NewType
 
 import msgspec
 
+UsageType = Literal["call", "sms", "data"]
 TariffId = NewType("TariffId", str)
 AddonId = NewType("AddonId", str)
 SubscriberId = NewType("SubscriberId", str)
@@ -40,3 +41,22 @@ class SubscriberProfile(msgspec.Struct, frozen=True):
     current_tariff_id: str
     months: tuple[str, ...]
     usage_file: str
+
+class NormalizedEvents(msgspec.Struct, frozen=True):
+    month: str
+    type: UsageType
+    roaming: bool
+    call_minutes: int = 0
+    sms_count: int = 0
+    day_data_gb: Decimal = Decimal(0)
+    night_data_gb: Decimal = Decimal(0)
+
+class MounthlyUsage(msgspec.Struct, frozen=True):
+    month: str
+    home_call_min: int = 0
+    home_sms: int = 0
+    home_day_gb: Decimal = Decimal(0)
+    home_night_gb: Decimal = Decimal(0)
+    roaming_call_min: int = 0
+    roaming_sms: int = 0
+    roaming_gb: Decimal = Decimal(0)
