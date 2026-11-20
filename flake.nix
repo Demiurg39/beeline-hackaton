@@ -1,5 +1,5 @@
 {
-  description = "Flake using pyproject.toml metadata";
+  description = "Beeline tariff and add-on recommendation engine based on 3-month subscriber usage";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   inputs.pyproject-nix.url = "github:pyproject-nix/pyproject.nix";

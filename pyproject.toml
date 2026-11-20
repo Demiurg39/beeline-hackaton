@@ -1,7 +1,7 @@
 [project]
-name = "hello-python"
+name = "beeline-advisor"
 version = "0.1.0"
-description = "A minimal pyproject.toml"
+description = "Beeline tariff and add-on recommendation engine based on 3-month subscriber usage"
 authors = [ ]
 requires-python = ">=3.13"
 dependencies = []
