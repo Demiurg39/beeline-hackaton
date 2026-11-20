@@ -1,5 +1,6 @@
 """
 parser.py
+Created by Aman (Montaggg) Ismailov
 
 Catalog loader and CSV usage parser with strict validation and Decimal arithmetic.
 """
