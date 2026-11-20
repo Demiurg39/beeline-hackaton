@@ -68,7 +68,7 @@ class TariffsConfig(msgspec.Struct, frozen=True):
         roaming_rates: Flat roaming unit rates excluded from bundles and night unlimited.
     """
 
-    curency: str
+    currency: str
     tariffs: tuple[Tariff, ...]
     roaming_rates: Rates
 
@@ -107,12 +107,12 @@ class SubscriberProfile(msgspec.Struct, frozen=True):
     """
 
     id: SubscriberId
-    current_tariff_id: str
+    current_tariff_id: TariffId
     months: tuple[str, ...]
     usage_file: str
 
 
-class NormalizedEvents(msgspec.Struct, frozen=True):
+class NormalizedEvent(msgspec.Struct, frozen=True):
     """Single usage record parsed from CSV with normalized billing units.
 
     Attributes:
@@ -134,7 +134,7 @@ class NormalizedEvents(msgspec.Struct, frozen=True):
     night_data_gb: Decimal = Decimal(0)
 
 
-class MounthlyUsage(msgspec.Struct, frozen=True):
+class MonthlyUsage(msgspec.Struct, frozen=True):
     """
     Aggregated subscriber usage totals for a single calendar month.
 
@@ -213,17 +213,17 @@ class RecommendationResult(msgspec.Struct, frozen=True):
         consumption_on_recommended_tariff: Per-month billable usage details.
     """
 
-    id: RecommendationId
+    id: SubscriberId
     action: ActionType
     tariff_id: TariffId
     addon_ids: list[AddonId]
-    currently_mounthly_cost: float
+    current_monthly_cost: float
     new_monthly_cost: float
     monthly_savings: float
     switch_fee: float
     net_savings_3m: float
-    monthly_cost: dict[str, float]
-    consumption_on_recommendation_tariff: list[MonthlyConsumptionDetails]
+    monthly_costs: dict[str, float]
+    consumption_on_recommended_tariff: list[MonthlyConsumptionDetails]
 
 
 class TariffComparisonItem(msgspec.Struct, frozen=True):
