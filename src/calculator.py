@@ -9,6 +9,7 @@ import re
 from collections.abc import Sequence
 from decimal import Decimal
 
+from src.exceptions import BillingDomainError
 from src.models import Addon, MonthlyUsage, Rates, Tariff
 
 BILLING_PERIOD_MONTHS: int = 3
@@ -47,8 +48,7 @@ def _validate_decimal_non_negative(value: Decimal, field_name: str) -> None:
         reason = (
             f"Field '{field_name}' must be a finite non-negative Decimal, got {value}"
         )
-        # TODO: substitude with BillingDomainError
-        raise Exception(reason)
+        raise BillingDomainError(reason, reason=reason)
 
 
 def _validate_rates(rates: Rates, label: str) -> None:
@@ -67,8 +67,7 @@ def _validate_addons(addons: Sequence[Addon]) -> None:
             f"At most {MAX_ADDONS_PER_OPTION} add-ons are allowed per option, "
             f"got {len(addons)}"
         )
-        # TODO: substitude with BillingDomainError
-        raise Exception(reason)
+        raise BillingDomainError(reason, reason=reason)
 
 
 def _validate_tariff(tariff: Tariff) -> None:
@@ -79,8 +78,7 @@ def _validate_tariff(tariff: Tariff) -> None:
 
     if tariff.minutes < 0 or tariff.sms < 0:
         reason = f"Tariff '{tariff.id}' minutes and sms quotas must be non-negative."
-        # TODO: substitude with BillingDomainError
-        raise Exception(reason)
+        raise BillingDomainError(reason, reason=reason)
 
     _validate_rates(tariff.overage, f"tariff '{tariff.id}' overage")
 
@@ -90,18 +88,15 @@ def _validate_monthly_usage(usage: MonthlyUsage) -> None:
 
     if _MONTH_PATTERN.match(usage.month) is None:
         reason = f"Invalid billing month format '{usage.month}'; expected 'YYYY-MM'."
-        # TODO: substitude with BillingDomainError
-        raise Exception(reason)
+        raise BillingDomainError(reason, reason=reason)
 
     if usage.home_call_min < 0 or usage.home_sms < 0:
         reason = f"Home call/SMS usage cannot be negative for month '{usage.month}'."
-        # TODO: substitude with BillingDomainError
-        raise Exception(reason)
+        raise BillingDomainError(reason, reason=reason)
 
     if usage.roaming_call_min < 0 or usage.roaming_sms < 0:
         reason = f"Roaming call/SMS usage cannot be negative for month '{usage.month}'."
-        # TODO: substitude with BillingDomainError
-        raise Exception(reason)
+        raise BillingDomainError(reason, reason=reason)
 
     _validate_decimal_non_negative(usage.home_day_gb, f"{usage.month}.home_day_gb")
     _validate_decimal_non_negative(usage.home_night_gb, f"{usage.month}.home_night_gb")
@@ -116,14 +111,12 @@ def _validate_billing_period(monthly_usages: Sequence[MonthlyUsage]) -> None:
             f"Expected exactly {BILLING_PERIOD_MONTHS} billing months, "
             f"got {len(monthly_usages)}"
         )
-        # TODO: substitute with BillingDomainError
-        raise Exception(reason)
+        raise BillingDomainError(reason, reason=reason)
 
     seen_months: set[str] = set()
     for usage in monthly_usages:
         _validate_monthly_usage(usage)
         if usage.month in seen_months:
             reason = f"Duplicate billing month '{usage.month}' is usage periond."
-            # TODO: substitude with BillingDomainError
-            raise Exception(reason)
+            raise BillingDomainError(reason, reason=reason)
         seen_months.add(usage.month)
