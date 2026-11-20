@@ -12,10 +12,11 @@ import re
 
 from src.models import Addon, Rates, Tariff, MonthlyUsage
 
+BILLING_PERIOD_MONTHS: int = 3
 MAX_ADDONS_PER_OPTION: int = 2
 
 _ZERO_DECIMAL: Decimal = Decimal(0)
-_MONTH_PATTERN: re.Pattern[str]= re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+_MONTH_PATTERN: re.Pattern[str] = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 def _validate_decimal_non_negative(value: Decimal, field_name: str) -> None:
@@ -62,6 +63,7 @@ def _validate_tariff(tariff: Tariff) -> None:
 
     _validate_rates(tariff.overage, f"tariff '{tariff.id}' overage")
 
+
 def _validate_monthly_usage(usage: MonthlyUsage) -> None:
     """Ensure month identifier and all consumption counters are valid."""
 
@@ -83,3 +85,24 @@ def _validate_monthly_usage(usage: MonthlyUsage) -> None:
     _validate_decimal_non_negative(usage.home_day_gb, f"{usage.month}.home_day_gb")
     _validate_decimal_non_negative(usage.home_night_gb, f"{usage.month}.home_night_gb")
     _validate_decimal_non_negative(usage.roaming_gb, f"{usage.month}.roaming_gb")
+
+
+def _validate_billing_period(monthly_usages: Sequence[MonthlyUsage]) -> None:
+    """Ensure ``monthly_usages`` spans exactly 3 distinct valid billing months."""
+
+    if len(monthly_usages) != BILLING_PERIOD_MONTHS:
+        reason = (
+            f"Expected exactly {BILLING_PERIOD_MONTHS} billing months, "
+            f"got {len(monthly_usages)}"
+        )
+        # TODO: substitute with BillingDomainError
+        raise Exception(reason)
+
+    seen_months: set[str] = set()
+    for usage in monthly_usages:
+        _validate_monthly_usage(usage)
+        if usage.month in seen_months:
+            reason = f"Duplicate billing month '{usage.month}' is usage periond."
+            # TODO: substitude with BillingDomainError
+            raise Exception(reason)
+        seen_months.add(usage.month)
