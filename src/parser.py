@@ -42,6 +42,14 @@ _ALLOWED_USAGE_TYPES: set[str] = {"call", "sms", "data"}
 _NIGHT_START_TIME: time = time(1, 0, 0)
 _NIGHT_END_TIME: time = time(7, 0, 0)
 
+__all__ = [
+    "calc_call_minutes",
+    "load_catalog",
+    "parse_usage_csv",
+    "resolve_subscriber",
+    "split_day_night_gb",
+]
+
 
 class _AddonsEnvelope(msgspec.Struct, frozen=True):
     """Wrapper schema when addons.json has a root object with an 'addons' key."""
