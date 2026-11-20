@@ -9,6 +9,7 @@ import re
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 
+from src.exceptions import BillingDomainError
 from src.models import (
     Addon,
     BillableUsage,
@@ -77,12 +78,12 @@ def calculate_month_cost(
     )
 
     roaming_cost = _compute_roaming_cost(usage, roaming_rates)
-    reccuring_fee = tariff.fee + sum(
+    recurring_fee = tariff.fee + sum(
         (addon.fee for addon in addons),
         start=_ZERO_DECIMAL,
     )
 
-    return reccuring_fee + overage_cost + roaming_cost
+    return recurring_fee + overage_cost + roaming_cost
 
 
 def calculate_option_costs(
@@ -94,24 +95,24 @@ def calculate_option_costs(
     """
     Evaluate exact 3-month average and per-month costs for one option.
 
-     Evaluates a fixed combination of one tariff and 0 to 2 add-ons across all
-     3 billing months without intermediate rounding so downstream ranking and
-     the 50 KGS switch-fee threshold check remain exact.
+    Evaluates a fixed combination of one tariff and 0 to 2 add-ons across all
+    3 billing months without intermediate rounding so downstream ranking and
+    the 50 KGS switch-fee threshold check remain exact.
 
-     Args:
-         monthly_usages: Subscriber consumption records for 3 distinct months.
-         tariff: Base tariff plan being evaluated.
-         addons: Active add-on packages applied across all 3 months (0 to 2 items).
-         roaming_rates: Standalone per-unit roaming rates (KGS).
+    Args:
+        monthly_usages: Subscriber consumption records for 3 distinct months.
+        tariff: Base tariff plan being evaluated.
+        addons: Active add-on packages applied across all 3 months (0 to 2 items).
+        roaming_rates: Standalone per-unit roaming rates (KGS).
 
-     Returns:
-         A tuple ``(avg_monthly_cost, monthly_costs)`` where ``avg_monthly_cost``
-         is the exact unrounded 3-month mean cost in KGS and ``monthly_costs``
-         maps each ``"YYYY-MM"`` month to its exact unrounded monthly cost in KGS.
+    Returns:
+        A tuple ``(avg_monthly_cost, monthly_costs)`` where ``avg_monthly_cost``
+        is the exact unrounded 3-month mean cost in KGS and ``monthly_costs``
+        maps each ``"YYYY-MM"`` month to its exact unrounded monthly cost in KGS.
 
-     Raises:
-         BillingDomainError: If ``monthly_usages`` does not contain exactly 3
-             distinct valid months or any tariff/add-on invariant is violated.
+    Raises:
+        BillingDomainError: If ``monthly_usages`` does not contain exactly 3
+            distinct valid months or any tariff/add-on invariant is violated.
     """
 
     _validate_billing_period(monthly_usages)
@@ -197,7 +198,7 @@ def _compute_billable_home_usage(
     """Return home-network billable ``(call_min, sms, data_gb)`` for a tariff."""
     billable_data_gb = (
         usage.home_day_gb
-        if tariff.night_unlimited == True
+        if tariff.night_unlimited
         else usage.home_day_gb + usage.home_night_gb
     )
 
@@ -242,6 +243,7 @@ def _validate_tariff(tariff: Tariff) -> None:
     if tariff.minutes < 0 or tariff.sms < 0:
         reason = f"Tariff '{tariff.id}' minutes and sms quotas must be non-negative."
         raise BillingDomainError(reason, reason=reason)
+        raise Exception(reason)
 
     _validate_rates(tariff.overage, f"tariff '{tariff.id}' overage")
 
@@ -280,6 +282,6 @@ def _validate_billing_period(monthly_usages: Sequence[MonthlyUsage]) -> None:
     for usage in monthly_usages:
         _validate_monthly_usage(usage)
         if usage.month in seen_months:
-            reason = f"Duplicate billing month '{usage.month}' is usage periond."
+            reason = f"Duplicate billing month '{usage.month}' is usage period."
             raise BillingDomainError(reason, reason=reason)
         seen_months.add(usage.month)
