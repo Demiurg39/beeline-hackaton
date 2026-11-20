@@ -8,21 +8,235 @@ the optimal recommendation for a subscriber.
 
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
+from itertools import combinations_with_replacement
 
-from src.calculator import BILLING_PERIOD_MONTHS
+from src.calculator import (
+    BILLING_PERIOD_MONTHS,
+    MAX_ADDONS_PER_OPTION,
+    build_consumption_details,
+    calculate_option_costs,
+)
 from src.exceptions import BillingDomainError, ConfigurationError
 from src.models import (
     ActionType,
+    Addon,
+    AddonId,
     MonthlyUsage,
+    RecommendationResult,
     SubscriberProfile,
+    Tariff,
+    TariffComparisonItem,
     TariffId,
     TariffsConfig,
 )
 
+SWITCH_FEE_KGS: Decimal = Decimal(50)
 
 _MONEY_QUANTUM: Decimal = Decimal("0.01")
 _ZERO_DECIMAL: Decimal = Decimal(0)
 _PERIOD_DECIMAL: Decimal = Decimal(BILLING_PERIOD_MONTHS)
+
+
+def evaluate_recommendations(
+    subscriber: SubscriberProfile,
+    monthly_usages: Sequence[MonthlyUsage],
+    tariffs_config: TariffsConfig,
+    addons: Sequence[Addon],
+) -> tuple[RecommendationResult, list[TariffComparisonItem]]:
+    """
+    Evaluate all valid tariff and add-on combinations and select the best option.
+
+    Generates combinations of each available tariff with 0 to 2 add-ons (with
+    replacement), evaluates exact 3-month unrounded costs via ``calculator``,
+    enforces the 50 KGS switch-fee payback threshold, resolves ties according to
+    billing rules, and builds both the core recommendation and per-tariff
+    comparison items for frontend charts.
+
+    Args:
+        subscriber: Subscriber profile specifying ``id``, ``current_tariff_id``,
+            and the 3 billing months.
+        monthly_usages: Aggregated consumption records for the subscriber's
+            3 billing months.
+        tariffs_config: Catalog containing available tariffs and roaming rates.
+        addons: Catalog of available monthly add-on packages.
+
+    Returns:
+        A tuple ``(recommendation, comparison)`` where:
+        - ``recommendation`` is a ``RecommendationResult`` matching the
+          ``expected.json`` output contract.
+        - ``comparison`` is a list of ``TariffComparisonItem`` preserving the
+          tariff order from ``tariffs_config.tariffs``.
+
+    Raises:
+        ConfigurationError: If ``tariffs_config.tariffs`` is empty, contains
+            duplicate tariff IDs, or lacks ``subscriber.current_tariff_id``.
+        BillingDomainError: If ``monthly_usages`` does not match the 3-month
+            billing period or any tariff/add-on invariant is violated.
+    """
+
+    _validate_catalog_and_usages(subscriber, monthly_usages, tariffs_config)
+
+    tariffs_by_id: dict[TariffId, Tariff] = {
+        tariff.id: tariff for tariff in tariffs_config.tariffs
+    }
+    current_tariff = tariffs_by_id[subscriber.current_tariff_id]
+
+    baseline_avg_monthly, baseline_monthly_costs = calculate_option_costs(
+        monthly_usages=monthly_usages,
+        tariff=current_tariff,
+        addons=(),
+        roaming_rates=tariffs_config.roaming_rates,
+    )
+
+    sorted_addons = tuple(sorted(addons, key=lambda addon: addon.id))
+    addon_combos: list[tuple[Addon, ...]] = [
+        combo
+        for count in range(MAX_ADDONS_PER_OPTION + 1)
+        for combo in combinations_with_replacement(sorted_addons, count)
+    ]
+
+    # Evaluated candidate tuple:
+    # (avg_monthly_cost, is_not_stay, addon_count, tariff_id, addon_ids,
+    #  tariff, monthly_costs, raw_monthly_savings, switch_fee, raw_net_savings_3m)
+    CandidateTuple = tuple[
+        Decimal,
+        int,
+        int,
+        TariffId,
+        list[AddonId],
+        Tariff,
+        dict[str, Decimal],
+        Decimal,
+        Decimal,
+        Decimal,
+    ]
+
+    eligible_candidates: list[CandidateTuple] = []
+    comparison_items: list[TariffComparisonItem] = []
+
+    for tariff in tariffs_config.tariffs:
+        is_same_tarif = tariff.id == subscriber.current_tariff_id
+        switch_fee = _ZERO_DECIMAL if is_same_tarif else SWITCH_FEE_KGS
+
+        best_for_tariff: CandidateTuple | None = None
+        best_for_tariff_key: tuple[Decimal, int, list[AddonId]] | None = None
+
+        for combo in addon_combos:
+            addon_ids: list[AddonId] = [addon.id for addon in combo]
+            is_stay_option = is_same_tarif and len(addon_ids) == 0
+
+            if is_stay_option:
+                avg_monthly_cost = baseline_avg_monthly
+                monthly_costs = baseline_monthly_costs
+            else:
+                avg_monthly_cost, monthly_costs = calculate_option_costs(
+                    monthly_usages=monthly_usages,
+                    tariff=tariff,
+                    addons=combo,
+                    roaming_rates=tariffs_config.roaming_rates,
+                )
+
+            raw_monthly_savings = baseline_avg_monthly - avg_monthly_cost
+            raw_net_savings_3m = raw_monthly_savings * _PERIOD_DECIMAL - switch_fee
+
+            candidate: CandidateTuple = (
+                avg_monthly_cost,
+                0 if is_stay_option else 1,
+                len(addon_ids),
+                tariff.id,
+                addon_ids,
+                tariff,
+                monthly_costs,
+                raw_monthly_savings,
+                switch_fee,
+                raw_net_savings_3m,
+            )
+
+            per_tariff_key = (avg_monthly_cost, len(addon_ids), addon_ids)
+            if best_for_tariff_key is None or per_tariff_key < best_for_tariff_key:
+                best_for_tariff_key = per_tariff_key
+                best_for_tariff = candidate
+
+            if _is_eligible_option(
+                is_same_tariff=is_same_tarif,
+                addon_count=len(addon_ids),
+                raw_monthly_savings=raw_monthly_savings,
+                raw_net_savings_3m=raw_net_savings_3m,
+            ):
+                eligible_candidates.append(candidate)
+
+        if best_for_tariff is not None:
+            (
+                best_avg_cost,
+                _,
+                _,
+                _,
+                best_addon_ids,
+                _,
+                _,
+                _,
+                _,
+                best_raw_net_savings_3m,
+            ) = best_for_tariff
+            comparison_items.append(
+                TariffComparisonItem(
+                    tariff_id=tariff.id,
+                    tariff_name=tariff.name,
+                    addon_ids=best_addon_ids,
+                    avg_monthly_cost=_round_money(best_avg_cost),
+                    net_savings_3m=_round_money(best_raw_net_savings_3m),
+                    is_profitable=best_raw_net_savings_3m > _ZERO_DECIMAL,
+                )
+            )
+    winner = min(
+        eligible_candidates,
+        key=lambda item: (item[0], item[1], item[2], item[3], item[4]),
+    )
+    (
+        win_avg_cost,
+        _,
+        _,
+        win_tariff_id,
+        win_addon_ids,
+        win_tariff,
+        win_monthly_costs,
+        win_raw_monthly_savings,
+        win_switch_fee,
+        win_raw_net_savings_3m,
+    ) = winner
+
+    action = _resolve_action(
+        current_tariff_id=subscriber.current_tariff_id,
+        recommended_tariff_id=win_tariff_id,
+        addon_count=len(win_addon_ids),
+    )
+
+    consumption_details = build_consumption_details(
+        monthly_usages=monthly_usages,
+        tariff=win_tariff,
+        roaming_rates=tariffs_config.roaming_rates,
+    )
+
+    rounded_monthly_costs: dict[str, float] = {
+        usage.month: _round_money(win_monthly_costs[usage.month])
+        for usage in monthly_usages
+    }
+
+    recommendation = RecommendationResult(
+        id=subscriber.id,
+        action=action,
+        tariff_id=win_tariff_id,
+        addon_ids=win_addon_ids,
+        current_monthly_cost=_round_money(baseline_avg_monthly),
+        new_monthly_cost=_round_money(win_avg_cost),
+        monthly_savings=_round_money(win_raw_monthly_savings),
+        switch_fee=_round_money(win_switch_fee),
+        net_savings_3m=_round_money(win_raw_net_savings_3m),
+        monthly_costs=rounded_monthly_costs,
+        consumption_on_recommended_tariff=consumption_details,
+    )
+
+    return recommendation, comparison_items
 
 
 def _round_money(value: Decimal) -> float:
