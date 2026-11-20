@@ -27,6 +27,19 @@ def _compute_roaming_cost(usage: MonthlyUsage, roaming_rates: Rates) -> Decimal:
     )
 
 
+def _compute_billable_home_usage(
+    usage: MonthlyUsage, tariff: Tariff
+) -> tuple[int, int, Decimal]:
+    """Return home-network billable ``(call_min, sms, data_gb)`` for a tariff."""
+    billable_data_gb = (
+        usage.home_day_gb
+        if tariff.night_unlimited == True
+        else usage.home_day_gb + usage.home_night_gb
+    )
+
+    return usage.home_call_min, usage.home_sms, billable_data_gb
+
+
 def _validate_decimal_non_negative(value: Decimal, field_name: str) -> None:
     """Ensure a ``Decimal`` value is finite and greater than or equal to zero."""
 
