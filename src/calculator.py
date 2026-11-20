@@ -79,6 +79,50 @@ def calculate_month_cost(
     return reccuring_fee + overage_cost + roaming_cost
 
 
+def calculate_option_costs(
+    monthly_usages: Sequence[MonthlyUsage],
+    tariff: Tariff,
+    addons: Sequence[Addon],
+    roaming_rates: Rates,
+) -> tuple[Decimal, dict[str, Decimal]]:
+    """
+    Evaluate exact 3-month average and per-month costs for one option.
+
+     Evaluates a fixed combination of one tariff and 0 to 2 add-ons across all
+     3 billing months without intermediate rounding so downstream ranking and
+     the 50 KGS switch-fee threshold check remain exact.
+
+     Args:
+         monthly_usages: Subscriber consumption records for 3 distinct months.
+         tariff: Base tariff plan being evaluated.
+         addons: Active add-on packages applied across all 3 months (0 to 2 items).
+         roaming_rates: Standalone per-unit roaming rates (KGS).
+
+     Returns:
+         A tuple ``(avg_monthly_cost, monthly_costs)`` where ``avg_monthly_cost``
+         is the exact unrounded 3-month mean cost in KGS and ``monthly_costs``
+         maps each ``"YYYY-MM"`` month to its exact unrounded monthly cost in KGS.
+
+     Raises:
+         BillingDomainError: If ``monthly_usages`` does not contain exactly 3
+             distinct valid months or any tariff/add-on invariant is violated.
+    """
+
+    _validate_billing_period(monthly_usages)
+    _validate_tariff(tariff)
+    _validate_addons(addons)
+    _validate_rates(roaming_rates, "roaming_rates")
+
+    monthly_costs: dict[str, Decimal] = {
+        usage.month: calculate_month_cost(usage, tariff, addons, roaming_rates)
+        for usage in monthly_usages
+    }
+    total_cost = sum(monthly_costs.values(), start=_ZERO_DECIMAL)
+    avg_monthly_cost = total_cost / Decimal(BILLING_PERIOD_MONTHS)
+
+    return avg_monthly_cost, monthly_costs
+
+
 def _compute_roaming_cost(usage: MonthlyUsage, roaming_rates: Rates) -> Decimal:
     """Return exact unrounded roaming charges (KGS) for a single month."""
     return (
