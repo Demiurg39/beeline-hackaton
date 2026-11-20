@@ -18,6 +18,15 @@ _ZERO_DECIMAL: Decimal = Decimal(0)
 _MONTH_PATTERN: re.Pattern[str] = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
+def _compute_roaming_cost(usage: MonthlyUsage, roaming_rates: Rates) -> Decimal:
+    """Return exact unrounded roaming charges (KGS) for a single month."""
+    return (
+        Decimal(usage.roaming_call_min) * roaming_rates.call
+        + usage.roaming_gb * roaming_rates.data
+        + Decimal(usage.roaming_sms) * roaming_rates.sms
+    )
+
+
 def _validate_decimal_non_negative(value: Decimal, field_name: str) -> None:
     """Ensure a ``Decimal`` value is finite and greater than or equal to zero."""
 
