@@ -8,7 +8,7 @@ Pure billing calculation service for single tariff and add-on options.
 from collections.abc import Sequence
 from decimal import Decimal
 
-from src.models import Addon, Rates
+from src.models import Addon, Rates, Tariff
 
 MAX_ADDONS_PER_OPTION: int = 2
 
@@ -44,3 +44,17 @@ def _validate_addons(addons: Sequence[Addon]) -> None:
         )
         # TODO: substitude with BillingDomainError
         raise Exception(reason)
+
+
+def _validate_tariff(tariff: Tariff) -> None:
+    """Ensure tariff fees, quotas, and overage rates are finite and non-negative."""
+
+    _validate_decimal_non_negative(tariff.fee, f"tariff '{tariff.id}' fee")
+    _validate_decimal_non_negative(tariff.gb, f"tariff '{tariff.id}' gb")
+
+    if tariff.minutes < 0 or tariff.sms < 0:
+        reason = f"Tariff '{tariff.id}' minutes and sms quotas must be non-negative."
+        # TODO: substitude with BillingDomainError
+        raise Exception(reason)
+
+    _validate_rates(tariff.overage, f"tariff '{tariff.id}' overage")
