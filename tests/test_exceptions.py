@@ -1,5 +1,6 @@
 """
 test_exceptions.py
+Created by Aman (Montaggg) Ismailov
 
 Unit tests for custom exceptions in src.exceptions.
 """

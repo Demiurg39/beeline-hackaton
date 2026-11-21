@@ -1,5 +1,6 @@
 """
 test_edge_cases.py
+Created by Amir (demiurg39) Chiryagov
 
 Parametrized end-to-end tests against the 12 official edge-case datasets.
 """

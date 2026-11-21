@@ -1,5 +1,6 @@
 """
 test_parser.py
+Created by Aman (Montaggg) Ismailov
 
 Unit tests for catalog loading and CSV parsing in src.parser.
 """

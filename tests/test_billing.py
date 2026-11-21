@@ -1,5 +1,6 @@
 """
 test_billing.py
+Created by Amir (demiurg39) Chiryagov
 
 Unit tests for single-option billing math and recommendation decision logic.
 """

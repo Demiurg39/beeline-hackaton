@@ -1,5 +1,6 @@
 """
 test_integration.py
+Created by Amir (demiurg39) Chiryagov
 
 Integration tests for the full pipeline and 10 open benchmark subscribers.
 """

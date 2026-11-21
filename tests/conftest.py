@@ -1,5 +1,6 @@
 """
 conftest.py
+Created by Amir (demiurg39) Chiryagov
 
 Shared fixtures, path constants, domain builders, and assertion helpers for pytest.
 """
