@@ -5,6 +5,7 @@ Created by Amir (demiurg39) Chiryagov
 Unit tests for single-option billing math and recommendation decision logic.
 """
 
+import math
 from decimal import Decimal
 
 import pytest
@@ -51,6 +52,34 @@ def test_calculate_month_cost_exact_limit_and_overage(
     )
     # 250 + (1 * 2) + (0.5 * 50) + (1 * 1) = 278
     assert calculate_month_cost(over_limit, t01, (), roaming) == Decimal(278)
+
+
+def test_roaming_billed_separately_even_with_unused_home_quotas(
+    sample_catalog: tuple[TariffsConfig, tuple[Addon, ...]],
+) -> None:
+    """Roaming charges never consume home allowances or night_unlimited."""
+    tariffs_config, _ = sample_catalog
+    t02 = tariffs_config.tariffs[1]  # fee=400, night_unlimited=True
+    roaming = tariffs_config.roaming_rates  # call=30, data=200, sms=10
+
+    usage = MonthlyUsage(
+        month="2026-08",
+        roaming_call_min=2,
+        roaming_sms=3,
+        roaming_gb=Decimal("0.5"),
+    )
+    # Roaming: 2*30 + 3*10 + 0.5*200 = 190; Total: 400 + 190 = 590
+    assert calculate_month_cost(usage, t02, (), roaming) == Decimal(590)
+
+    details = build_consumption_details(
+        [usage, MonthlyUsage(month="2026-09"), MonthlyUsage(month="2026-10")],
+        t02,
+        roaming,
+    )
+    assert details[0].billable_usage.call == 0.0
+    assert details[0].billable_usage.sms == 0.0
+    assert details[0].billable_usage.data == 0.0
+    assert details[0].roaming_cost_som == 190.0
 
 
 def test_night_unlimited_excludes_night_data_from_quota_and_details(
@@ -240,25 +269,82 @@ def test_round_half_up_and_no_intermediate_rounding() -> None:
                 minutes=0,
                 gb="0",
                 sms=0,
-                overage=Rates(Decimal("0.01"), Decimal("0.5"), Decimal("0.01")),
+                overage=Rates(Decimal("0.001"), Decimal("1"), Decimal("0.001")),
             ),
         ),
         roaming_rates=Rates(Decimal(1), Decimal(1), Decimal(1)),
     )
-    # Month 1: 250.005 -> 250.01; Month 2: 250.01; Month 3: 250.00
+    # Month 1: 250.004 -> 250.00; Month 2: 250.004 -> 250.00; Month 3: 250.007 -> 250.01
     # Exact 3m sum = 750.015 -> exact avg = 250.005 -> ROUND_HALF_UP = 250.01
+    # (Intermediate rounding would give (250.00 + 250.00 + 250.01) / 3 = 250.0033 -> 250.00;
+    #  ROUND_HALF_EVEN on 250.005 would also give 250.00.)
     usages = [
-        MonthlyUsage(month="2026-08", home_day_gb=Decimal("0.01")),
-        MonthlyUsage(month="2026-09", home_call_min=1),
-        MonthlyUsage(month="2026-10"),
+        MonthlyUsage(month="2026-08", home_call_min=4),
+        MonthlyUsage(month="2026-09", home_call_min=4),
+        MonthlyUsage(month="2026-10", home_call_min=7),
     ]
 
     result = recommend_tariff(make_subscriber(), usages, config, ())
 
-    assert result.monthly_costs["2026-08"] == 250.01
-    assert result.monthly_costs["2026-09"] == 250.01
-    assert result.monthly_costs["2026-10"] == 250.0
+    assert result.monthly_costs["2026-08"] == 250.0
+    assert result.monthly_costs["2026-09"] == 250.0
+    assert result.monthly_costs["2026-10"] == 250.01
     assert result.current_monthly_cost == 250.01
+
+
+def test_negative_zero_is_normalized_to_positive_zero(
+    default_roaming_rates: Rates,
+) -> None:
+    """Tiny negative Decimal amounts rounding to zero never serialize as -0.0."""
+    config = TariffsConfig(
+        currency="KGS",
+        tariffs=(
+            make_tariff("T01", "Current", fee="300", minutes=100),
+            make_tariff(
+                "T02",
+                "TinyLoss",
+                fee="300",
+                minutes=124,
+                overage=Rates(Decimal("0.001"), Decimal("50"), Decimal("1")),
+            ),
+        ),
+        roaming_rates=default_roaming_rates,
+    )
+    # T01 3m = 950.00, T02 3m = 900.001, switch_fee = 50 -> raw_net_savings_3m = -0.001 -> 0.0
+    usages = [
+        MonthlyUsage(month="2026-08", home_call_min=125),
+        MonthlyUsage(month="2026-09"),
+        MonthlyUsage(month="2026-10"),
+    ]
+
+    _, comparison = evaluate_recommendations(make_subscriber(), usages, config, ())
+    t02_item = next(item for item in comparison if item.tariff_id == TariffId("T02"))
+    assert t02_item.net_savings_3m == 0.0
+    assert math.copysign(1.0, t02_item.net_savings_3m) == 1.0
+
+
+@pytest.mark.parametrize(
+    "bad_addon",
+    [
+        make_addon("A_NEG_FEE", fee="-10"),
+        make_addon("A_NEG_GB", gb="-1"),
+        make_addon("A_NEG_MIN", minutes=-5),
+        make_addon("A_NEG_SMS", sms=-1),
+        make_addon("A_NAN_FEE", fee=Decimal("NaN")),
+        make_addon("A_INF_GB", gb=Decimal("Infinity")),
+    ],
+)
+def test_invalid_addon_fields_raise_billing_domain_error(
+    sample_catalog: tuple[TariffsConfig, tuple[Addon, ...]],
+    bad_addon: Addon,
+) -> None:
+    """Negative or non-finite add-on fees/allowances raise BillingDomainError."""
+    tariffs_config, _ = sample_catalog
+    t01 = tariffs_config.tariffs[0]
+    roaming = tariffs_config.roaming_rates
+
+    with pytest.raises(BillingDomainError):
+        calculate_month_cost(MonthlyUsage(month="2026-08"), t01, (bad_addon,), roaming)
 
 
 def test_domain_invariants_raise_domain_or_configuration_errors(
