@@ -41,6 +41,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "fastapi-msgspec" },
     { name = "msgspec" },
+    { name = "pytest" },
     { name = "python-multipart" },
     { name = "uvicorn" },
 ]
@@ -57,6 +58,7 @@ requires-dist = [
     { name = "fastapi-msgspec", specifier = ">=0.1.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
     { name = "msgspec", specifier = ">=0.22.0" },
+    { name = "pytest", specifier = ">=9.2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "uvicorn", specifier = ">=0.30.0" },
