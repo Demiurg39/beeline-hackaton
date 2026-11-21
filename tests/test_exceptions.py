@@ -38,6 +38,23 @@ def test_base_exception_attributes_and_serialization() -> None:
     }
 
 
+def test_base_exception_defaults_and_details_isolation() -> None:
+    """Base exception uses default code/status and copies caller details dict."""
+    base_exc = TariffCalculatorError("Default error")
+    assert base_exc.error_code == "TARIFF_CALCULATOR_ERROR"
+    assert base_exc.status_code == 400
+    assert base_exc.details == {}
+
+    original_details = {"extra": "value"}
+    merged_exc = BillingDomainError(
+        "Domain error",
+        reason="Broken invariant",
+        details=original_details,
+    )
+    original_details["extra"] = "mutated"
+    assert merged_exc.details == {"reason": "Broken invariant", "extra": "value"}
+
+
 def test_data_file_not_found_error() -> None:
     """DataFileNotFoundError inherits from base and exposes file_path in details."""
     exc = DataFileNotFoundError("File missing", file_path="data/usage_P01.csv")
