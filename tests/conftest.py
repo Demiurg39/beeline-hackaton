@@ -59,7 +59,15 @@ def sample_catalog(
     tariffs_config = TariffsConfig(
         currency="KGS",
         tariffs=(
-            make_tariff("T01", "Start", fee="250", minutes=100, gb="10", sms=50),
+            make_tariff(
+                "T01",
+                "Start",
+                fee="250",
+                minutes=100,
+                gb="10",
+                sms=50,
+                overage=default_overage_rates,
+            ),
             make_tariff(
                 "T02",
                 "Night Pro",
@@ -210,7 +218,7 @@ def assert_recommendation_matches(
     ):
         if money_field in expected:
             assert actual[money_field] == pytest.approx(
-                expected[money_field], abs=0.01
+                expected[money_field], abs=1e-9
             ), f"{sub_id}: mismatch in {money_field}"
 
     if "monthly_costs" in expected:
@@ -219,7 +227,7 @@ def assert_recommendation_matches(
         )
         for month, expected_cost in expected["monthly_costs"].items():
             assert actual["monthly_costs"][month] == pytest.approx(
-                expected_cost, abs=0.01
+                expected_cost, abs=1e-9
             ), f"{sub_id}: monthly_costs[{month}] mismatch"
 
     if "consumption_on_recommended_tariff" in expected:
@@ -230,7 +238,7 @@ def assert_recommendation_matches(
         for act_item, exp_item in zip(actual_details, expected_details, strict=True):
             assert act_item["month"] == exp_item["month"]
             assert act_item["roaming_cost_som"] == pytest.approx(
-                exp_item["roaming_cost_som"], abs=0.01
+                exp_item["roaming_cost_som"], abs=1e-9
             )
             for metric in ("call", "sms", "data"):
                 assert act_item["billable_usage"][metric] == pytest.approx(
