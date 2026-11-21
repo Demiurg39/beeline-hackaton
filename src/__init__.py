@@ -4,13 +4,18 @@ Created by Amir (demiurg39) Chiryagov
 
 Public package entry points for the Beeline tariff recommendation engine.
 """
+
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import msgspec
 
-from src.exceptions import BillingDomainError, SubscriberNotFoundError
+from src.exceptions import (
+    BillingDomainError,
+    DataFileNotFoundError,
+    SubscriberNotFoundError,
+)
 from src.models import (
     RecommendationResult,
     SubscriberId,
@@ -27,6 +32,11 @@ _CATALOG_MARKER_FILES: tuple[str, str, str] = (
     "addons.json",
     "subscribers.json",
 )
+
+__all__ = [
+    "evaluate_usage_file",
+    "recommend",
+]
 
 
 def evaluate_usage_file(
@@ -54,6 +64,12 @@ def evaluate_usage_file(
     """
 
     usage_path = Path(usage_file)
+    if not usage_path.is_file():
+        raise DataFileNotFoundError(
+            f"Usage CSV file not found: {usage_path}",
+            file_path=str(usage_path),
+        )
+
     catalog_dir = _resolve_catalog_dir(usage_path, data_dir)
     tariffs_config, addons, subscribers = load_catalog(catalog_dir)
 
