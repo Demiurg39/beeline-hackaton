@@ -243,7 +243,6 @@ def _validate_tariff(tariff: Tariff) -> None:
     if tariff.minutes < 0 or tariff.sms < 0:
         reason = f"Tariff '{tariff.id}' minutes and sms quotas must be non-negative."
         raise BillingDomainError(reason, reason=reason)
-        raise Exception(reason)
 
     _validate_rates(tariff.overage, f"tariff '{tariff.id}' overage")
 
