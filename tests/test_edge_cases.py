@@ -44,8 +44,16 @@ def test_official_edge_case_matches_expected(case_dir: Path) -> None:
     usage_files = sorted(case_dir.glob("usage_*.csv"))
     assert usage_files, f"No usage_*.csv files found in {case_dir}"
 
+    seen_ids: set[str] = set()
     for usage_file in usage_files:
         actual = recommend(usage_file)
         sub_id = actual["id"]
-        assert sub_id in expected_by_id, f"{case_dir.name}: unexpected subscriber id '{sub_id}'"
+        assert sub_id in expected_by_id, (
+            f"{case_dir.name}: unexpected subscriber id '{sub_id}'"
+        )
         assert_recommendation_matches(actual, expected_by_id[sub_id])
+        seen_ids.add(sub_id)
+
+    assert seen_ids == set(expected_by_id.keys()), (
+        f"{case_dir.name}: some expected subscribers were not evaluated"
+    )
