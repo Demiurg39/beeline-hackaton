@@ -1,4 +1,8 @@
-"""Unit tests for custom exceptions in src.exceptions."""
+"""
+test_exceptions.py
+
+Unit tests for custom exceptions in src.exceptions.
+"""
 
 from src.exceptions import (
     BillingDomainError,

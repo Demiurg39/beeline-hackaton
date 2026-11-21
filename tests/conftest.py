@@ -1,4 +1,8 @@
-"""Shared fixtures, path constants, domain builders, and assertion helpers for pytest."""
+"""
+conftest.py
+
+Shared fixtures, path constants, domain builders, and assertion helpers for pytest.
+"""
 
 import json
 from decimal import Decimal

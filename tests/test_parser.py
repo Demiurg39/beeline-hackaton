@@ -1,4 +1,8 @@
-"""Unit tests for catalog loading and CSV parsing in src.parser."""
+"""
+test_parser.py
+
+Unit tests for catalog loading and CSV parsing in src.parser.
+"""
 
 import json
 from datetime import datetime
