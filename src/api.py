@@ -5,20 +5,22 @@ Created by Aman (Montaggg) Ismailov
 JSON-first FastAPI REST service exposing the Beeline tariff recommendation engine.
 """
 
-from collections.abc import Callable
 import csv
-from decimal import Decimal
 import io
-from pathlib import Path
+import logging
 import re
 import tempfile
+from collections.abc import Callable
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
+import msgspec
 from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi_msgspec.responses import MsgSpecJSONResponse
-import msgspec
 
 from src import evaluate_usage_file
 from src.exceptions import (
@@ -31,9 +33,11 @@ from src.models import (
     Addon,
     ApiRecommendationResponse,
     MonthlyUsage,
+    Rates,
     RecommendationResult,
     SubscriberId,
     SubscriberProfile,
+    Tariff,
     TariffComparisonItem,
     TariffId,
     TariffsConfig,
@@ -41,6 +45,8 @@ from src.models import (
 )
 from src.parser import load_catalog
 from src.recommender import evaluate_recommendations
+
+logger = logging.getLogger(__name__)
 
 MsgspecJSONResponse = MsgSpecJSONResponse
 
@@ -57,6 +63,7 @@ class UsageEventInput(msgspec.Struct, frozen=True):
     amount: Decimal
     duration_sec: int = 0
     roaming: int = 0
+
 
 class UsageSliders(msgspec.Struct, frozen=True):
     """Typical single-month consumption values for interactive UI sliders."""
@@ -97,8 +104,8 @@ class CatalogResponse(msgspec.Struct, frozen=True):
     """Combined catalog payload for single-request frontend initialization."""
 
     currency: str
-    tariffs: tuple[Any, ...]
-    roaming_rates: Any
+    tariffs: tuple[Tariff, ...]
+    roaming_rates: Rates
     addons: list[Addon]
     subscribers: list[SubscriberProfile]
 
@@ -109,6 +116,7 @@ _OPENAPI_MODELS: tuple[type[msgspec.Struct], ...] = (
     UsageSliders,
     MonthlyUsage,
     ApiRecommendationResponse,
+    CatalogResponse,
     TariffsConfig,
     Addon,
     SubscriberProfile,
@@ -123,26 +131,7 @@ _ROUTE_SCHEMAS: dict[tuple[str, str], dict[str, Any]] = {
         },
     },
     ("/api/catalog", "get"): {
-        "response": {
-            "type": "object",
-            "properties": {
-                "currency": {"type": "string", "example": "KGS"},
-                "tariffs": {
-                    "type": "array",
-                    "items": {"$ref": "#/components/schemas/Tariff"},
-                },
-                "roaming_rates": {"$ref": "#/components/schemas/Rates"},
-                "addons": {
-                    "type": "array",
-                    "items": {"$ref": "#/components/schemas/Addon"},
-                },
-                "subscribers": {
-                    "type": "array",
-                    "items": {"$ref": "#/components/schemas/SubscriberProfile"},
-                },
-            },
-            "required": ["currency", "tariffs", "roaming_rates", "addons", "subscribers"],
-        },
+        "response": {"$ref": "#/components/schemas/CatalogResponse"},
     },
     ("/api/tariffs", "get"): {
         "response": {"$ref": "#/components/schemas/TariffsConfig"},
@@ -187,6 +176,27 @@ def _normalize_optional_str(value: str | None) -> str | None:
     return stripped if stripped else None
 
 
+def _sanitize_upload_filename(raw_filename: str | None) -> str:
+    """Return a safe basename for saving an uploaded CSV inside a temporary directory."""
+    safe_name = Path(raw_filename or "uploaded_usage.csv").name
+    if safe_name in {"", ".", ".."}:
+        return "uploaded_usage.csv"
+    return safe_name
+
+
+def _validate_known_tariff_id(
+    tariff_id: str | None,
+    tariffs_config: TariffsConfig,
+) -> None:
+    """Ensure a client-supplied current_tariff_id exists in the loaded tariff catalog."""
+    if tariff_id is None:
+        return
+    known_ids = {tariff.id for tariff in tariffs_config.tariffs}
+    if TariffId(tariff_id) not in known_ids:
+        reason = f"Unknown tariff id '{tariff_id}'."
+        raise BillingDomainError(reason, reason=reason)
+
+
 def _parse_form_months(raw_months: list[str] | None) -> tuple[str, ...] | None:
     """Normalize ``months`` submitted via multipart/form-data."""
     if not raw_months:
@@ -221,7 +231,9 @@ def _parse_form_months(raw_months: list[str] | None) -> tuple[str, ...] | None:
     return tuple(parsed) if parsed else None
 
 
-def _validate_three_months(months: list[str] | tuple[str, ...] | None) -> tuple[str, str, str]:
+def _validate_three_months(
+    months: list[str] | tuple[str, ...] | None,
+) -> tuple[str, str, str]:
     """Validate that exactly 3 unique ``YYYY-MM`` billing months are provided."""
     if not months or len(months) != 3:
         reason = "Exactly 3 billing months in 'YYYY-MM' format are required."
@@ -240,8 +252,13 @@ def _validate_three_months(months: list[str] | tuple[str, ...] | None) -> tuple[
     return (cleaned[0], cleaned[1], cleaned[2])
 
 
+def _is_valid_non_negative_decimal(value: Decimal) -> bool:
+    """Return True if value is a finite non-negative Decimal."""
+    return value.is_finite() and value >= Decimal(0)
+
+
 def _validate_monthly_usage_items(items: list[MonthlyUsage]) -> list[MonthlyUsage]:
-    """Ensure pre-aggregated monthly usage items have valid months and non-negative values."""
+    """Ensure pre-aggregated monthly usage items have valid months and finite non-negative values."""
     if len(items) != 3:
         reason = "Exactly 3 MonthlyUsage entries are required."
         raise BillingDomainError(reason, reason=reason)
@@ -253,13 +270,13 @@ def _validate_monthly_usage_items(items: list[MonthlyUsage]) -> list[MonthlyUsag
         if (
             item.home_call_min < 0
             or item.home_sms < 0
-            or item.home_day_gb < Decimal(0)
-            or item.home_night_gb < Decimal(0)
             or item.roaming_call_min < 0
             or item.roaming_sms < 0
-            or item.roaming_gb < Decimal(0)
+            or not _is_valid_non_negative_decimal(item.home_day_gb)
+            or not _is_valid_non_negative_decimal(item.home_night_gb)
+            or not _is_valid_non_negative_decimal(item.roaming_gb)
         ):
-            reason = f"Usage values for month '{item.month}' must be non-negative."
+            reason = f"Usage values for month '{item.month}' must be finite and non-negative."
             raise BillingDomainError(reason, reason=reason)
         validated.append(
             MonthlyUsage(
@@ -335,7 +352,14 @@ def _generate_explanation(
     except ImportError:
         return _build_fallback_explanation(recommendation, comparison)
 
-    return explain_recommendation(recommendation, comparison)
+    try:
+        return explain_recommendation(recommendation, comparison)
+    except Exception:
+        logger.warning(
+            "LLM explanation generation failed; using deterministic fallback.",
+            exc_info=True,
+        )
+        return _build_fallback_explanation(recommendation, comparison)
 
 
 def _evaluate_json_request(
@@ -363,6 +387,9 @@ def _evaluate_json_request(
         )
         raise BillingDomainError(reason, reason=reason)
 
+    tariffs_config, addons, subscribers = load_catalog(data_dir)
+    _validate_known_tariff_id(current_tariff_id, tariffs_config)
+
     # Mode 1: Preset subscriber lookup from subscribers.json
     if explicit_sources == 0:
         if subscriber_id is None:
@@ -372,7 +399,6 @@ def _evaluate_json_request(
             )
             raise BillingDomainError(reason, reason=reason)
 
-        _, _, subscribers = load_catalog(data_dir)
         profile = subscribers.get(SubscriberId(subscriber_id))
         if profile is None:
             raise SubscriberNotFoundError(
@@ -425,8 +451,6 @@ def _evaluate_json_request(
                 subscriber_id=resolved_sub_id,
             )
 
-    tariffs_config, addons, _ = load_catalog(data_dir)
-
     # Mode 4: Pre-aggregated 3-month usage list
     if payload.monthly_usage is not None:
         validated_usages = _validate_monthly_usage_items(payload.monthly_usage)
@@ -450,7 +474,10 @@ def _evaluate_json_request(
 
     # Mode 5: Interactive single-month UI sliders projected across 3 months
     sliders = payload.average_usage
-    assert sliders is not None
+    if sliders is None:
+        reason = "No usage source was provided."
+        raise BillingDomainError(reason, reason=reason)
+
     months = (
         _validate_three_months(payload.months)
         if payload.months is not None
@@ -483,6 +510,33 @@ def _evaluate_json_request(
         tariffs_config=tariffs_config,
         addons=addons,
     )
+
+
+def _evaluate_uploaded_csv(
+    *,
+    raw_bytes: bytes,
+    safe_name: str,
+    data_dir: Path,
+    current_tariff_id: str | None,
+    months: tuple[str, ...] | None,
+    subscriber_id: str | None,
+) -> tuple[RecommendationResult, list[TariffComparisonItem]]:
+    """Validate and evaluate an uploaded CSV file inside a temporary directory."""
+    if current_tariff_id is not None:
+        tariffs_config, _, _ = load_catalog(data_dir)
+        _validate_known_tariff_id(current_tariff_id, tariffs_config)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        target_path = Path(tmp_dir) / safe_name
+        target_path.write_bytes(raw_bytes)
+
+        return evaluate_usage_file(
+            usage_file=target_path,
+            data_dir=data_dir,
+            current_tariff_id=current_tariff_id,
+            months=months,
+            subscriber_id=subscriber_id,
+        )
 
 
 def _build_openapi_generator(app: FastAPI) -> Callable[[], dict[str, Any]]:
@@ -548,7 +602,9 @@ def _build_openapi_generator(app: FastAPI) -> Callable[[], dict[str, Any]]:
                         "description": desc,
                         "content": {
                             "application/json": {
-                                "schema": {"$ref": "#/components/schemas/ErrorResponse"},
+                                "schema": {
+                                    "$ref": "#/components/schemas/ErrorResponse"
+                                },
                             },
                         },
                     },
@@ -568,7 +624,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         title="Beeline Tariff Advisor API",
         version="0.1.0",
         description="JSON-first REST API for 3-month subscriber usage analysis and tariff/add-on recommendations.",
-        default_response_class=MsgspecJSONResponse,
+        default_response_class=MsgSpecJSONResponse,
     )
     application.state.data_dir = resolved_data_dir
 
@@ -582,21 +638,21 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
     @application.exception_handler(TariffCalculatorError)
     async def handle_tariff_calculator_error(
-        _request: Any,
+        _request: Request,
         exc: TariffCalculatorError,
-    ) -> MsgspecJSONResponse:
-        return MsgspecJSONResponse(
+    ) -> MsgSpecJSONResponse:
+        return MsgSpecJSONResponse(
             status_code=exc.status_code,
             content=exc.to_dict(),
         )
 
     @application.get("/api/health", response_model=None, tags=["system"])
-    async def healthcheck() -> MsgspecJSONResponse:
+    def healthcheck() -> MsgSpecJSONResponse:
         """Return service liveness status."""
-        return MsgspecJSONResponse(content={"status": "ok"})
+        return MsgSpecJSONResponse(content={"status": "ok"})
 
     @application.get("/api/catalog", response_model=None, tags=["catalog"])
-    async def get_catalog() -> MsgspecJSONResponse:
+    def get_catalog() -> MsgSpecJSONResponse:
         """Return tariffs, roaming rates, add-ons, and demo subscribers in one response."""
         tariffs_config, addons, subscribers = load_catalog(application.state.data_dir)
         catalog = CatalogResponse(
@@ -606,28 +662,28 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             addons=list(addons),
             subscribers=list(subscribers.values()),
         )
-        return MsgspecJSONResponse(content=catalog)
+        return MsgSpecJSONResponse(content=catalog)
 
     @application.get("/api/tariffs", response_model=None, tags=["catalog"])
-    async def get_tariffs() -> MsgspecJSONResponse:
+    def get_tariffs() -> MsgSpecJSONResponse:
         """Return available tariffs, currency, and roaming rates."""
         tariffs_config, _, _ = load_catalog(application.state.data_dir)
-        return MsgspecJSONResponse(content=tariffs_config)
+        return MsgSpecJSONResponse(content=tariffs_config)
 
     @application.get("/api/addons", response_model=None, tags=["catalog"])
-    async def get_addons() -> MsgspecJSONResponse:
+    def get_addons() -> MsgSpecJSONResponse:
         """Return all available monthly add-on packages."""
         _, addons, _ = load_catalog(application.state.data_dir)
-        return MsgspecJSONResponse(content=list(addons))
+        return MsgSpecJSONResponse(content=list(addons))
 
     @application.get("/api/subscribers", response_model=None, tags=["catalog"])
-    async def get_subscribers() -> MsgspecJSONResponse:
+    def get_subscribers() -> MsgSpecJSONResponse:
         """Return predefined demo subscriber profiles from subscribers.json."""
         _, _, subscribers = load_catalog(application.state.data_dir)
-        return MsgspecJSONResponse(content=list(subscribers.values()))
+        return MsgSpecJSONResponse(content=list(subscribers.values()))
 
     @application.post("/api/recommend", response_model=None, tags=["recommendations"])
-    async def recommend_from_json(request: Request) -> MsgspecJSONResponse:
+    async def recommend_from_json(request: Request) -> MsgSpecJSONResponse:
         """
         Primary JSON endpoint: decode ``RecommendRequest`` and return recommendation.
         """
@@ -643,7 +699,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 strict=False,
             )
         except (msgspec.DecodeError, msgspec.ValidationError) as exc:
-            return MsgspecJSONResponse(
+            return MsgSpecJSONResponse(
                 status_code=422,
                 content={
                     "error": "REQUEST_VALIDATION_ERROR",
@@ -652,12 +708,13 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 },
             )
 
-        recommendation, comparison = _evaluate_json_request(
+        recommendation, comparison = await run_in_threadpool(
+            _evaluate_json_request,
             payload=payload,
             data_dir=application.state.data_dir,
         )
         explanation = (
-            _generate_explanation(recommendation, comparison)
+            await run_in_threadpool(_generate_explanation, recommendation, comparison)
             if payload.include_explanation
             else None
         )
@@ -666,19 +723,21 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             comparison=comparison,
             llm_explanation=explanation,
         )
-        return MsgspecJSONResponse(content=response_payload)
+        return MsgSpecJSONResponse(content=response_payload)
 
-    @application.post("/api/recommend/upload", response_model=None, tags=["recommendations"])
+    @application.post(
+        "/api/recommend/upload", response_model=None, tags=["recommendations"]
+    )
     async def recommend_from_csv_upload(
         file: UploadFile = File(...),
         current_tariff_id: str | None = Form(default=None),
         months: list[str] | None = Form(default=None),
         subscriber_id: str | None = Form(default=None),
         include_explanation: bool = Form(default=True),
-    ) -> MsgspecJSONResponse:
+    ) -> MsgSpecJSONResponse:
         """Secondary multipart/form-data endpoint for direct CSV file uploads."""
         raw_bytes = await file.read()
-        safe_name = Path(file.filename or "uploaded_usage.csv").name or "uploaded_usage.csv"
+        safe_name = _sanitize_upload_filename(file.filename)
 
         if len(raw_bytes) == 0:
             raise CsvFormatError(
@@ -691,20 +750,18 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         normalized_tariff_id = _normalize_optional_str(current_tariff_id)
         normalized_subscriber_id = _normalize_optional_str(subscriber_id)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            target_path = Path(tmp_dir) / safe_name
-            target_path.write_bytes(raw_bytes)
-
-            recommendation, comparison = evaluate_usage_file(
-                usage_file=target_path,
-                data_dir=application.state.data_dir,
-                current_tariff_id=normalized_tariff_id,
-                months=parsed_months,
-                subscriber_id=normalized_subscriber_id,
-            )
+        recommendation, comparison = await run_in_threadpool(
+            _evaluate_uploaded_csv,
+            raw_bytes=raw_bytes,
+            safe_name=safe_name,
+            data_dir=application.state.data_dir,
+            current_tariff_id=normalized_tariff_id,
+            months=parsed_months,
+            subscriber_id=normalized_subscriber_id,
+        )
 
         explanation = (
-            _generate_explanation(recommendation, comparison)
+            await run_in_threadpool(_generate_explanation, recommendation, comparison)
             if include_explanation
             else None
         )
@@ -713,7 +770,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             comparison=comparison,
             llm_explanation=explanation,
         )
-        return MsgspecJSONResponse(content=response_payload)
+        return MsgSpecJSONResponse(content=response_payload)
 
     application.openapi = _build_openapi_generator(application)  # type: ignore[method-assign]
     return application
