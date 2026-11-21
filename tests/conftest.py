@@ -19,6 +19,12 @@ from src.models import (
     TariffsConfig,
 )
 
+PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+DATA_DIR: Path = PROJECT_ROOT / "data"
+EDGE_CASES_DIR: Path = DATA_DIR / "edge_cases"
+DEFAULT_MONTHS: tuple[str, str, str] = ("2026-08", "2026-09", "2026-10")
+
+
 def make_tariff(
     tariff_id: str,
     name: str = "Plan",
