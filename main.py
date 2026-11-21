@@ -14,17 +14,10 @@ from src import recommend
 from src.exceptions import TariffCalculatorError
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Beeline tariff recommendation CLI & API launcher.",
+        description="Beeline tariff recommendation CLI.",
     )
-    subparsers = parser.add_subparsers(dest="command")
-
-    serve_parser = subparsers.add_parser("serve", help="Run FastAPI backend server")
-    serve_parser.add_argument("--host", default="0.0.0.0")
-    serve_parser.add_argument("--port", type=int, default=8000)
-    serve_parser.add_argument("--reload", action="store_true")
-
     parser.add_argument(
         "usage_file",
         nargs="?",
@@ -37,14 +30,31 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = _build_parser().parse_args()
+def _build_serve_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="main.py serve",
+        description="Run FastAPI backend server.",
+    )
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--reload", action="store_true")
+    return parser
 
-    if args.command == "serve":
+
+def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        serve_args = _build_serve_parser().parse_args(sys.argv[2:])
         import uvicorn
 
-        uvicorn.run("src.api:app", host=args.host, port=args.port, reload=args.reload)
+        uvicorn.run(
+            "src.api:app",
+            host=serve_args.host,
+            port=serve_args.port,
+            reload=serve_args.reload,
+        )
         return 0
+
+    args = _build_cli_parser().parse_args()
 
     try:
         if args.usage_file is not None:
