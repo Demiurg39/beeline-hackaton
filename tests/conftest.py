@@ -29,9 +29,9 @@ DEFAULT_MONTHS: tuple[str, str, str] = ("2026-08", "2026-09", "2026-10")
 def default_overage_rates() -> Rates:
     """Return standard per-unit overage rates in KGS."""
     return Rates(
-        call=Decimal("2"),
-        data=Decimal("50"),
-        sms=Decimal("1"),
+        call=Decimal(2),
+        data=Decimal(50),
+        sms=Decimal(1),
     )
 
 
@@ -39,9 +39,9 @@ def default_overage_rates() -> Rates:
 def default_roaming_rates() -> Rates:
     """Return standard per-unit roaming rates in KGS."""
     return Rates(
-        call=Decimal("30"),
-        data=Decimal("200"),
-        sms=Decimal("10"),
+        call=Decimal(30),
+        data=Decimal(200),
+        sms=Decimal(10),
     )
 
 
@@ -62,7 +62,7 @@ def sample_catalog(
                 minutes=200,
                 gb="15",
                 sms=100,
-                overage=Rates(Decimal("2"), Decimal("40"), Decimal("1")),
+                overage=Rates(Decimal(2), Decimal(40), Decimal(1)),
                 night_unlimited=True,
             ),
             make_tariff(
@@ -72,7 +72,7 @@ def sample_catalog(
                 minutes=500,
                 gb="30",
                 sms=300,
-                overage=Rates(Decimal("1"), Decimal("30"), Decimal("1")),
+                overage=Rates(Decimal(1), Decimal(30), Decimal(1)),
                 night_unlimited=True,
             ),
         ),
@@ -105,7 +105,7 @@ def make_tariff(
         minutes=minutes,
         gb=Decimal(str(gb)),
         sms=sms,
-        overage=overage or Rates(Decimal("2"), Decimal("50"), Decimal("1")),
+        overage=overage or Rates(Decimal(2), Decimal(50), Decimal(1)),
         night_unlimited=night_unlimited,
     )
 
