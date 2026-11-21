@@ -28,8 +28,9 @@ from src.parser import (
     resolve_subscriber,
     split_day_night_gb,
 )
+from tests.conftest import DEFAULT_MONTHS
 
-MONTHS: tuple[str, ...] = ("2026-08", "2026-09", "2026-10")
+MONTHS: tuple[str, ...] = DEFAULT_MONTHS
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +55,7 @@ def _base_subscriber(profile_id: str = "P01", tariff_id: str = "T01") -> dict:
     return {
         "id": profile_id,
         "current_tariff_id": tariff_id,
-        "months": ["2026-08", "2026-09", "2026-10"],
+        "months": list(MONTHS),
         "usage_file": f"usage_{profile_id}.csv",
     }
 
@@ -132,10 +133,10 @@ def test_empty_middle_month_preserved_in_order(tmp_path: Path) -> None:
 
 def test_call_minutes_rounding_per_record(tmp_path: Path) -> None:
     """Each call is rounded up independently before monthly summation."""
-    assert calc_call_minutes(Decimal("0")) == 0
-    assert calc_call_minutes(Decimal("1")) == 1
-    assert calc_call_minutes(Decimal("60")) == 1
-    assert calc_call_minutes(Decimal("61")) == 2
+    assert calc_call_minutes(Decimal(0)) == 0
+    assert calc_call_minutes(Decimal(1)) == 1
+    assert calc_call_minutes(Decimal(60)) == 1
+    assert calc_call_minutes(Decimal(61)) == 2
 
     csv_file = tmp_path / "usage_calls.csv"
     csv_file.write_text(
@@ -156,15 +157,15 @@ def test_zero_duration_data_night_window_boundaries() -> None:
 
     assert split_day_night_gb(datetime(2026, 8, 1, 0, 59, 59), 0, amount) == (
         Decimal("2.5"),
-        Decimal("0"),
+        Decimal(0),
     )
     assert split_day_night_gb(datetime(2026, 8, 1, 1, 0, 0), 0, amount) == (
-        Decimal("0"),
+        Decimal(0),
         Decimal("2.5"),
     )
     assert split_day_night_gb(datetime(2026, 8, 1, 7, 0, 0), 0, amount) == (
         Decimal("2.5"),
-        Decimal("0"),
+        Decimal(0),
     )
 
 
@@ -172,41 +173,40 @@ def test_positive_duration_data_night_crossings() -> None:
     """Positive-duration data sessions split volume proportionally across night boundaries."""
     # Enter night: 00:40:00 + 3000s (50m) -> 20m day (40%), 30m night (60%)
     day_1, night_1 = split_day_night_gb(
-        datetime(2026, 8, 1, 0, 40, 0), 3000, Decimal("10")
+        datetime(2026, 8, 1, 0, 40, 0), 3000, Decimal(10)
     )
-    assert day_1 == Decimal("4")
-    assert night_1 == Decimal("6")
-    assert day_1 + night_1 == Decimal("10")
+    assert day_1 == Decimal(4)
+    assert night_1 == Decimal(6)
+    assert day_1 + night_1 == Decimal(10)
 
     # Exit night: 06:30:00 + 3600s (60m) -> 30m night (50%), 30m day (50%)
     day_2, night_2 = split_day_night_gb(
-        datetime(2026, 8, 1, 6, 30, 0), 3600, Decimal("8")
+        datetime(2026, 8, 1, 6, 30, 0), 3600, Decimal(8)
     )
-    assert day_2 == Decimal("4")
-    assert night_2 == Decimal("4")
+    assert day_2 == Decimal(4)
+    assert night_2 == Decimal(4)
 
     # Cross midnight: 23:30:00 + 7200s (120m -> 01:30:00) -> 75% day, 25% night
     day_3, night_3 = split_day_night_gb(
-        datetime(2026, 8, 1, 23, 30, 0), 7200, Decimal("12")
+        datetime(2026, 8, 1, 23, 30, 0), 7200, Decimal(12)
     )
-    assert day_3 == Decimal("9")
-    assert night_3 == Decimal("3")
+    assert day_3 == Decimal(9)
+    assert night_3 == Decimal(3)
 
 
 def test_missing_optional_columns_default_values(tmp_path: Path) -> None:
     """CSV without duration_sec and roaming columns defaults them to 0 and False."""
     csv_file = tmp_path / "usage_minimal.csv"
     csv_file.write_text(
-        "date,type,amount\n"
-        "2026-08-15T02:00:00,data,1.25\n",
+        "date,type,amount\n2026-08-15T02:00:00,data,1.25\n",
         encoding="utf-8",
     )
 
     result = parse_usage_csv(csv_file, MONTHS)
 
-    assert result[0].home_day_gb == Decimal("0")
+    assert result[0].home_day_gb == Decimal(0)
     assert result[0].home_night_gb == Decimal("1.25")
-    assert result[0].roaming_gb == Decimal("0")
+    assert result[0].roaming_gb == Decimal(0)
 
 
 @pytest.mark.parametrize(
@@ -214,6 +214,8 @@ def test_missing_optional_columns_default_values(tmp_path: Path) -> None:
     [
         ("2026-08-01T12:00:00,mms,1,0,0", "type"),
         ("2026-08-01T12:00:00,call,-10,0,0", "amount"),
+        ("2026-08-01T12:00:00,data,NaN,0,0", "amount"),
+        ("2026-08-01T12:00:00,data,Infinity,0,0", "amount"),
         ("2026-08-01T12:00:00,sms,1.5,0,0", "amount"),
         ("2026-08-01T12:00:00,call,30,0,2", "roaming"),
         ("not-a-date,call,30,0,0", "date"),
@@ -260,51 +262,11 @@ def test_csv_format_and_domain_errors(tmp_path: Path) -> None:
 
 def test_load_catalog_wrapped_and_resolve_subscriber(tmp_path: Path) -> None:
     """load_catalog supports wrapped JSON objects and resolve_subscriber matches by filename."""
-    (tmp_path / "tariffs.json").write_text(
-        """
-        {
-          "currency": "KGS",
-          "tariffs": [
-            {
-              "id": "T01",
-              "name": "Start",
-              "fee": "250",
-              "minutes": 100,
-              "gb": "10",
-              "sms": 50,
-              "overage": {"call": "2", "data": "50", "sms": "1"},
-              "night_unlimited": false
-            }
-          ],
-          "roaming_rates": {"call": "30", "data": "200", "sms": "10"}
-        }
-        """,
-        encoding="utf-8",
-    )
-    (tmp_path / "addons.json").write_text(
-        """
-        {
-          "addons": [
-            {"id": "A01", "name": "+5 GB", "fee": "100", "minutes": 0, "gb": "5", "sms": 0}
-          ]
-        }
-        """,
-        encoding="utf-8",
-    )
-    (tmp_path / "subscribers.json").write_text(
-        """
-        {
-          "subscribers": [
-            {
-              "id": "P01",
-              "current_tariff_id": "T01",
-              "months": ["2026-08", "2026-09", "2026-10"],
-              "usage_file": "usage_P01.csv"
-            }
-          ]
-        }
-        """,
-        encoding="utf-8",
+    _write_catalog(
+        tmp_path,
+        tariffs=_base_tariffs_config([_base_tariff("T01")]),
+        addons={"addons": [_base_addon("A01")]},
+        subscribers={"subscribers": [_base_subscriber("P01", "T01")]},
     )
 
     tariffs_cfg, addons, subscribers = load_catalog(tmp_path)
@@ -319,30 +281,44 @@ def test_load_catalog_wrapped_and_resolve_subscriber(tmp_path: Path) -> None:
         resolve_subscriber(Path("usage_UNKNOWN.csv"), subscribers)
 
 
-def test_load_catalog_validation_errors(tmp_path: Path) -> None:
-    """Missing catalog files raise DataFileNotFoundError; unknown tariff raises ConfigurationError."""
+def test_load_catalog_missing_files_raises_data_file_not_found(tmp_path: Path) -> None:
+    """Missing catalog files raise DataFileNotFoundError."""
     with pytest.raises(DataFileNotFoundError):
         load_catalog(tmp_path)
 
-    (tmp_path / "tariffs.json").write_text(
-        '{"currency": "KGS", "tariffs": [], '
-        '"roaming_rates": {"call": "1", "data": "1", "sms": "1"}}',
-        encoding="utf-8",
-    )
-    (tmp_path / "addons.json").write_text("[]", encoding="utf-8")
-    (tmp_path / "subscribers.json").write_text(
-        '[{"id": "P01", "current_tariff_id": "T99", '
-        '"months": ["2026-08", "2026-09", "2026-10"], '
-        '"usage_file": "usage_P01.csv"}]',
-        encoding="utf-8",
+
+def test_load_catalog_empty_tariffs_raises_configuration_error(tmp_path: Path) -> None:
+    """Empty tariffs list raises ConfigurationError."""
+    _write_catalog(
+        tmp_path,
+        tariffs=_base_tariffs_config([]),
+        addons=[],
+        subscribers=[],
     )
 
-    with pytest.raises(ConfigurationError):
+    with pytest.raises(ConfigurationError) as exc_info:
         load_catalog(tmp_path)
+    assert "empty" in exc_info.value.details["reason"].lower()
+
+
+def test_load_catalog_unknown_subscriber_tariff_raises_configuration_error(
+    tmp_path: Path,
+) -> None:
+    """Subscriber referencing unknown tariff ID raises ConfigurationError."""
+    _write_catalog(
+        tmp_path,
+        tariffs=_base_tariffs_config([_base_tariff("T01")]),
+        addons=[],
+        subscribers=[_base_subscriber("P01", "T99")],
+    )
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        load_catalog(tmp_path)
+    assert "T99" in exc_info.value.details["reason"]
 
 
 # ---------------------------------------------------------------------------
-# Additional catalog coverage (previously missing)
+# Additional catalog coverage
 # ---------------------------------------------------------------------------
 
 
@@ -381,6 +357,19 @@ def test_load_catalog_duplicate_addon_id(tmp_path: Path) -> None:
         tariffs=_base_tariffs_config([_base_tariff()]),
         addons=[_base_addon("A01"), _base_addon("A01")],
         subscribers=[],
+    )
+
+    with pytest.raises(ConfigurationError):
+        load_catalog(tmp_path)
+
+
+def test_load_catalog_duplicate_subscriber_id(tmp_path: Path) -> None:
+    """Duplicate subscriber.id raises ConfigurationError."""
+    _write_catalog(
+        tmp_path,
+        tariffs=_base_tariffs_config([_base_tariff()]),
+        addons=[],
+        subscribers=[_base_subscriber("P01"), _base_subscriber("P01")],
     )
 
     with pytest.raises(ConfigurationError):
@@ -426,10 +415,21 @@ def test_load_catalog_negative_roaming_rates(tmp_path: Path) -> None:
         load_catalog(tmp_path)
 
 
-def test_load_catalog_negative_addon_fields(tmp_path: Path) -> None:
-    """Negative addon fee/allowance raises ConfigurationError."""
+@pytest.mark.parametrize(
+    "field_override",
+    [
+        {"fee": "-1"},
+        {"gb": "-1"},
+        {"minutes": -1},
+        {"sms": -1},
+    ],
+)
+def test_load_catalog_negative_addon_fields(
+    tmp_path: Path, field_override: dict
+) -> None:
+    """Negative addon fee or allowance raises ConfigurationError."""
     addon = _base_addon()
-    addon["fee"] = "-1"
+    addon.update(field_override)
     _write_catalog(
         tmp_path,
         tariffs=_base_tariffs_config([_base_tariff()]),
@@ -445,6 +445,21 @@ def test_load_catalog_subscriber_wrong_months_count(tmp_path: Path) -> None:
     """Subscriber with != 3 months raises ConfigurationError."""
     subscriber = _base_subscriber()
     subscriber["months"] = ["2026-08", "2026-09"]
+    _write_catalog(
+        tmp_path,
+        tariffs=_base_tariffs_config([_base_tariff()]),
+        addons=[],
+        subscribers=[subscriber],
+    )
+
+    with pytest.raises(ConfigurationError):
+        load_catalog(tmp_path)
+
+
+def test_load_catalog_subscriber_duplicate_months(tmp_path: Path) -> None:
+    """Subscriber with duplicate billing months raises ConfigurationError."""
+    subscriber = _base_subscriber()
+    subscriber["months"] = ["2026-08", "2026-08", "2026-10"]
     _write_catalog(
         tmp_path,
         tariffs=_base_tariffs_config([_base_tariff()]),
@@ -487,8 +502,19 @@ def test_load_catalog_broken_json_raises_configuration_error(
 
 
 # ---------------------------------------------------------------------------
-# Additional parser coverage (previously missing)
+# Additional parser coverage
 # ---------------------------------------------------------------------------
+
+
+def test_parse_usage_csv_with_utf8_bom(tmp_path: Path) -> None:
+    """UTF-8 BOM at the beginning of a CSV file is handled transparently."""
+    csv_file = tmp_path / "usage_bom.csv"
+    csv_file.write_bytes(
+        "\ufeffdate,type,amount\n2026-08-01T10:00:00,sms,2\n".encode("utf-8")
+    )
+
+    result = parse_usage_csv(csv_file, MONTHS)
+    assert result[0].home_sms == 2
 
 
 def test_parse_usage_missing_file(tmp_path: Path) -> None:
@@ -510,11 +536,7 @@ def test_parse_usage_zero_byte_file(tmp_path: Path) -> None:
 def test_parse_usage_bad_utf8(tmp_path: Path) -> None:
     """Non-UTF-8 bytes raise CsvFormatError."""
     csv_file = tmp_path / "bad_utf8.csv"
-    csv_file.write_bytes(
-        b"date,type,amount\n"
-        b"2026-08-01T10:00:00,call,30\n"
-        b"\xff\xfe\n"
-    )
+    csv_file.write_bytes(b"date,type,amount\n2026-08-01T10:00:00,call,30\n\xff\xfe\n")
 
     with pytest.raises(CsvFormatError):
         parse_usage_csv(csv_file, MONTHS)
@@ -553,25 +575,22 @@ def test_roaming_data_goes_entirely_to_roaming_gb(tmp_path: Path) -> None:
     """Roaming data volume is never split into day/night home buckets."""
     csv_file = tmp_path / "u.csv"
     csv_file.write_text(
-        "date,type,amount,duration_sec,roaming\n"
-        # Session fully inside night window, but roaming=1 -> all to roaming_gb.
-        "2026-08-01T02:00:00,data,2.5,3600,1\n",
+        "date,type,amount,duration_sec,roaming\n2026-08-01T02:00:00,data,2.5,3600,1\n",
         encoding="utf-8",
     )
 
     result = parse_usage_csv(csv_file, MONTHS)
 
     assert result[0].roaming_gb == Decimal("2.5")
-    assert result[0].home_day_gb == Decimal("0")
-    assert result[0].home_night_gb == Decimal("0")
+    assert result[0].home_day_gb == Decimal(0)
+    assert result[0].home_night_gb == Decimal(0)
 
 
 def test_fractional_call_amount_rounds_up(tmp_path: Path) -> None:
     """Fractional seconds on a call still round up to one minute."""
     csv_file = tmp_path / "u.csv"
     csv_file.write_text(
-        "date,type,amount\n"
-        "2026-08-01T10:00:00,call,30.5\n",
+        "date,type,amount\n2026-08-01T10:00:00,call,30.5\n",
         encoding="utf-8",
     )
 
@@ -583,8 +602,7 @@ def test_sms_amount_integral_but_decimal_form(tmp_path: Path) -> None:
     """SMS amount '5.0' is accepted as 5 (integer-valued Decimal)."""
     csv_file = tmp_path / "u.csv"
     csv_file.write_text(
-        "date,type,amount\n"
-        "2026-08-01T10:00:00,sms,5.0\n",
+        "date,type,amount\n2026-08-01T10:00:00,sms,5.0\n",
         encoding="utf-8",
     )
 
@@ -596,8 +614,7 @@ def test_date_only_iso_rejected(tmp_path: Path) -> None:
     """Date-only ISO strings are rejected — the parser requires a time component."""
     csv_file = tmp_path / "u.csv"
     csv_file.write_text(
-        "date,type,amount\n"
-        "2026-08-01,call,30\n",
+        "date,type,amount\n2026-08-01,call,30\n",
         encoding="utf-8",
     )
 
@@ -609,18 +626,15 @@ def test_date_only_iso_rejected(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "row_line",
     [
-        "2026-08-01T10:00:00,data,1.5,-1,0",   # negative duration_sec
+        "2026-08-01T10:00:00,data,1.5,-1,0",  # negative duration_sec
         "2026-08-01T10:00:00,data,1.5,1.5,0",  # fractional duration_sec
     ],
 )
-def test_invalid_duration_sec_values_rejected(
-    tmp_path: Path, row_line: str
-) -> None:
+def test_invalid_duration_sec_values_rejected(tmp_path: Path, row_line: str) -> None:
     """Negative / fractional duration_sec raise CsvRowValidationError."""
     csv_file = tmp_path / "u.csv"
     csv_file.write_text(
-        "date,type,amount,duration_sec,roaming\n"
-        f"{row_line}\n",
+        f"date,type,amount,duration_sec,roaming\n{row_line}\n",
         encoding="utf-8",
     )
 
@@ -631,22 +645,48 @@ def test_invalid_duration_sec_values_rejected(
 
 def test_split_fully_inside_day_and_night() -> None:
     """Whole-session splits when the interval lies fully inside day or night."""
-    assert split_day_night_gb(
-        datetime(2026, 8, 1, 12, 0, 0), 3600, Decimal("5")
-    ) == (Decimal("5"), Decimal("0"))
-    assert split_day_night_gb(
-        datetime(2026, 8, 1, 2, 0, 0), 1800, Decimal("5")
-    ) == (Decimal("0"), Decimal("5"))
+    assert split_day_night_gb(datetime(2026, 8, 1, 12, 0, 0), 3600, Decimal(5)) == (
+        Decimal(5),
+        Decimal(0),
+    )
+    assert split_day_night_gb(datetime(2026, 8, 1, 2, 0, 0), 1800, Decimal(5)) == (
+        Decimal(0),
+        Decimal(5),
+    )
+
+
+def test_split_long_multi_day_session_is_exact_and_fast() -> None:
+    """Multi-day durations use exact O(1) full-day math (6h night / 24h = 25%)."""
+    day_gb, night_gb = split_day_night_gb(
+        datetime(2026, 8, 1, 12, 0, 0),
+        1000 * 86_400,
+        Decimal(400),
+    )
+    assert day_gb == Decimal(300)
+    assert night_gb == Decimal(100)
+
+
+def test_math_helpers_reject_invalid_direct_arguments() -> None:
+    """Public math helpers validate negative and non-finite inputs directly."""
+    with pytest.raises(BillingDomainError):
+        calc_call_minutes(Decimal(-1))
+    with pytest.raises(BillingDomainError):
+        calc_call_minutes(Decimal("NaN"))
+    with pytest.raises(BillingDomainError):
+        split_day_night_gb(datetime(2026, 8, 1, 12, 0, 0), -10, Decimal(1))
+    with pytest.raises(BillingDomainError):
+        split_day_night_gb(datetime(2026, 8, 1, 12, 0, 0), 60, Decimal(-1))
+    with pytest.raises(BillingDomainError):
+        split_day_night_gb(datetime(2026, 8, 1, 12, 0, 0), 60, Decimal("NaN"))
 
 
 @pytest.mark.parametrize(
     ("start", "duration_sec", "amount"),
     [
-        (datetime(2026, 8, 1, 0, 40, 0), 3000, Decimal("10")),
-        (datetime(2026, 8, 1, 6, 30, 0), 3600, Decimal("8")),
-        (datetime(2026, 8, 1, 23, 30, 0), 7200, Decimal("12")),
-        # Multi-day session crossing two full night windows.
-        (datetime(2026, 8, 1, 23, 0, 0), 86400, Decimal("24")),
+        (datetime(2026, 8, 1, 0, 40, 0), 3000, Decimal(10)),
+        (datetime(2026, 8, 1, 6, 30, 0), 3600, Decimal(8)),
+        (datetime(2026, 8, 1, 23, 30, 0), 7200, Decimal(12)),
+        (datetime(2026, 8, 1, 23, 0, 0), 86400, Decimal(24)),
     ],
 )
 def test_split_invariant_day_plus_night_equals_amount(
@@ -655,5 +695,5 @@ def test_split_invariant_day_plus_night_equals_amount(
     """day_gb + night_gb must equal amount_gb exactly (no rounding drift)."""
     day, night = split_day_night_gb(start, duration_sec, amount)
     assert day + night == amount
-    assert day >= Decimal("0")
-    assert night >= Decimal("0")
+    assert day >= Decimal(0)
+    assert night >= Decimal(0)
