@@ -13,10 +13,13 @@ from pathlib import Path
 from src import recommend
 from src.exceptions import TariffCalculatorError
 
+DEFAULT_DATA_DIR: Path = Path("data")
+
 
 def _build_cli_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Beeline tariff recommendation CLI.",
+        epilog="Run 'python main.py serve --help' to start the FastAPI backend server.",
     )
     parser.add_argument(
         "usage_file",
@@ -24,7 +27,12 @@ def _build_cli_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Path to usage_<id>.csv. If omitted, evaluates all usage_*.csv in --data-dir.",
     )
-    parser.add_argument("--data-dir", type=Path, default=Path("data"))
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=None,
+        help="Directory with tariffs.json, addons.json, and subscribers.json.",
+    )
     parser.add_argument("--tariff", type=str, default=None)
     parser.add_argument("--months", nargs=3, default=None, metavar=("M1", "M2", "M3"))
     return parser
@@ -67,14 +75,13 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
 
-        csv_files = sorted(args.data_dir.glob("usage_*.csv"))
+        batch_dir = args.data_dir if args.data_dir is not None else DEFAULT_DATA_DIR
+        csv_files = sorted(batch_dir.glob("usage_*.csv"))
         if not csv_files:
-            print(f"No usage_*.csv files found in {args.data_dir}", file=sys.stderr)
+            print(f"No usage_*.csv files found in {batch_dir}", file=sys.stderr)
             return 1
 
-        results = [
-            recommend(csv_path, data_dir=args.data_dir) for csv_path in csv_files
-        ]
+        results = [recommend(csv_path, data_dir=batch_dir) for csv_path in csv_files]
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0
     except TariffCalculatorError as exc:
