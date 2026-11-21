@@ -34,6 +34,8 @@ from src.models import (
 
 BILLING_PERIOD_MONTHS: int = 3
 SECONDS_PER_MINUTE: Decimal = Decimal(60)
+_SECONDS_PER_DAY: int = 86_400
+_NIGHT_SECONDS_PER_DAY: int = 6 * 3_600
 _ZERO_DECIMAL: Decimal = Decimal(0)
 _MONTH_PATTERN: re.Pattern[str] = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 _REQUIRED_CSV_COLUMNS: set[str] = {"date", "type", "amount"}
@@ -144,6 +146,14 @@ def _validate_tariffs_config(
     config: TariffsConfig, config_file: str
 ) -> set[TariffId]:
     """Validate tariffs.json schema semantics and return known tariff IDs."""
+    if not config.tariffs:
+        reason = "Tariff catalog cannot be empty"
+        raise ConfigurationError(
+            f"Invalid configuration in '{config_file}': {reason}",
+            config_file=config_file,
+            reason=reason,
+        )
+
     _validate_rates(config.roaming_rates, config_file, "roaming_rates")
 
     seen_tariff_ids: set[TariffId] = set()
@@ -244,6 +254,7 @@ def _validate_subscribers(
                 reason=reason,
             )
 
+        seen_months: set[str] = set()
         for month in profile.months:
             if _MONTH_PATTERN.match(month) is None:
                 reason = (
@@ -255,6 +266,14 @@ def _validate_subscribers(
                     config_file=config_file,
                     reason=reason,
                 )
+            if month in seen_months:
+                reason = f"Subscriber '{profile.id}' has duplicate month '{month}'"
+                raise ConfigurationError(
+                    f"Invalid configuration in '{config_file}': {reason}",
+                    config_file=config_file,
+                    reason=reason,
+                )
+            seen_months.add(month)
 
         subscribers_map[profile.id] = profile
 
@@ -346,6 +365,9 @@ def resolve_subscriber(
 
 def calc_call_minutes(duration_sec: Decimal) -> int:
     """Round a single call duration in seconds up to whole minutes (0 -> 0)."""
+    if not duration_sec.is_finite() or duration_sec < _ZERO_DECIMAL:
+        reason = f"Call duration must be a finite non-negative Decimal, got {duration_sec}"
+        raise BillingDomainError(reason, reason=reason)
     if duration_sec == _ZERO_DECIMAL:
         return 0
     return int(
@@ -359,24 +381,38 @@ def split_day_night_gb(
     amount_gb: Decimal,
 ) -> tuple[Decimal, Decimal]:
     """Split home data volume into (day_gb, night_gb) for [01:00:00, 07:00:00)."""
+    if duration_sec < 0:
+        reason = f"duration_sec must be non-negative, got {duration_sec}"
+        raise BillingDomainError(reason, reason=reason)
+    if not amount_gb.is_finite() or amount_gb < _ZERO_DECIMAL:
+        reason = f"amount_gb must be a finite non-negative Decimal, got {amount_gb}"
+        raise BillingDomainError(reason, reason=reason)
+
     if duration_sec == 0:
         if _NIGHT_START_TIME <= start_dt.time() < _NIGHT_END_TIME:
             return _ZERO_DECIMAL, amount_gb
         return amount_gb, _ZERO_DECIMAL
 
-    end_dt = start_dt + timedelta(seconds=duration_sec)
-    night_sec = 0
-    current_day = start_dt.date()
-    last_day = end_dt.date()
+    full_days, rem_sec = divmod(duration_sec, _SECONDS_PER_DAY)
+    night_sec = full_days * _NIGHT_SECONDS_PER_DAY
 
-    while current_day <= last_day:
-        night_start = datetime.combine(current_day, _NIGHT_START_TIME)
-        night_end = datetime.combine(current_day, _NIGHT_END_TIME)
-        overlap_start = max(start_dt, night_start)
-        overlap_end = min(end_dt, night_end)
-        if overlap_end > overlap_start:
-            night_sec += int((overlap_end - overlap_start).total_seconds())
-        current_day += timedelta(days=1)
+    if rem_sec > 0:
+        try:
+            end_dt = start_dt + timedelta(seconds=rem_sec)
+        except OverflowError as exc:
+            reason = f"Session end datetime overflows valid range for start '{start_dt.isoformat()}'."
+            raise BillingDomainError(reason, reason=reason) from exc
+
+        current_day = start_dt.date()
+        last_day = end_dt.date()
+        while current_day <= last_day:
+            night_start = datetime.combine(current_day, _NIGHT_START_TIME)
+            night_end = datetime.combine(current_day, _NIGHT_END_TIME)
+            overlap_start = max(start_dt, night_start)
+            overlap_end = min(end_dt, night_end)
+            if overlap_end > overlap_start:
+                night_sec += int((overlap_end - overlap_start).total_seconds())
+            current_day += timedelta(days=1)
 
     night_gb = amount_gb * Decimal(night_sec) / Decimal(duration_sec)
     day_gb = amount_gb - night_gb
@@ -417,9 +453,6 @@ def _parse_row_date(
         )
 
     cleaned = raw_date.strip()
-    # Enforce date+time: 'YYYY-MM-DDTHH:MM[:SS[.ffffff]]' or with a space.
-    # This rejects date-only, compact (basic) ISO forms, week dates, etc.,
-    # even though datetime.fromisoformat() would accept several of them.
     if len(cleaned) < 16 or cleaned[10] not in ("T", " "):
         raise CsvRowValidationError(
             f"Row {row_number}: 'date' must include a time component, got '{raw_date}'",
@@ -613,7 +646,7 @@ def parse_usage_csv(
     months_set: set[str] = set(months)
 
     try:
-        with usage_file.open("r", encoding="utf-8", newline="") as handle:
+        with usage_file.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
             if reader.fieldnames is None:
                 raise CsvFormatError(
@@ -682,8 +715,6 @@ def parse_usage_csv(
             file_path=str(usage_file),
         ) from exc
     except OSError as exc:
-        # Any other I/O error (permission, disk, etc.) must not be reported
-        # as a missing file — surface it as a format error instead.
         raise CsvFormatError(
             f"Unable to read usage CSV file '{usage_file}': {exc}",
             file_path=str(usage_file),
