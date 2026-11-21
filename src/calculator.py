@@ -26,6 +26,14 @@ _MONEY_QUANTUM: Decimal = Decimal("0.01")
 _ZERO_DECIMAL: Decimal = Decimal(0)
 _MONTH_PATTERN: re.Pattern[str] = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
+__all__ = [
+    "BILLING_PERIOD_MONTHS",
+    "MAX_ADDONS_PER_OPTION",
+    "build_consumption_details",
+    "calculate_month_cost",
+    "calculate_option_costs",
+]
+
 
 def calculate_month_cost(
     usage: MonthlyUsage,
@@ -59,31 +67,7 @@ def calculate_month_cost(
     _validate_addons(addons)
     _validate_rates(roaming_rates, "roaming_rates")
 
-    total_minutes = tariff.minutes + sum((addon.minutes for addon in addons), start=0)
-    total_gb = tariff.gb + sum((addon.gb for addon in addons), start=_ZERO_DECIMAL)
-    total_sms = tariff.sms + sum((addon.sms for addon in addons), start=0)
-
-    billable_call_min, billable_sms, billable_data_gb = _compute_billable_home_usage(
-        usage, tariff
-    )
-
-    overage_minutes = max(0, billable_call_min - total_minutes)
-    overage_gb = max(_ZERO_DECIMAL, billable_data_gb - total_gb)
-    overage_sms = max(0, billable_sms - total_sms)
-
-    overage_cost = (
-        Decimal(overage_minutes) * tariff.overage.call
-        + overage_gb * tariff.overage.data
-        + Decimal(overage_sms) * tariff.overage.sms
-    )
-
-    roaming_cost = _compute_roaming_cost(usage, roaming_rates)
-    recurring_fee = tariff.fee + sum(
-        (addon.fee for addon in addons),
-        start=_ZERO_DECIMAL,
-    )
-
-    return recurring_fee + overage_cost + roaming_cost
+    return _calculate_month_cost_unchecked(usage, tariff, addons, roaming_rates)
 
 
 def calculate_option_costs(
@@ -121,7 +105,9 @@ def calculate_option_costs(
     _validate_rates(roaming_rates, "roaming_rates")
 
     monthly_costs: dict[str, Decimal] = {
-        usage.month: calculate_month_cost(usage, tariff, addons, roaming_rates)
+        usage.month: _calculate_month_cost_unchecked(
+            usage, tariff, addons, roaming_rates
+        )
         for usage in monthly_usages
     }
     total_cost = sum(monthly_costs.values(), start=_ZERO_DECIMAL)
@@ -164,8 +150,13 @@ def build_consumption_details(
             _compute_billable_home_usage(usage, tariff)
         )
         roaming_cost = _compute_roaming_cost(usage, roaming_rates)
-        roaming_cost_rounded = float(
-            roaming_cost.quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+        roaming_cost_quantized = roaming_cost.quantize(
+            _MONEY_QUANTUM, rounding=ROUND_HALF_UP
+        )
+        roaming_cost_rounded = (
+            0.0
+            if roaming_cost_quantized == _ZERO_DECIMAL
+            else float(roaming_cost_quantized)
         )
 
         details.append(
@@ -181,6 +172,40 @@ def build_consumption_details(
         )
 
     return details
+
+
+def _calculate_month_cost_unchecked(
+    usage: MonthlyUsage,
+    tariff: Tariff,
+    addons: Sequence[Addon],
+    roaming_rates: Rates,
+) -> Decimal:
+    """Compute exact unrounded cost for one pre-validated billing month."""
+    total_minutes = tariff.minutes + sum((addon.minutes for addon in addons), start=0)
+    total_gb = tariff.gb + sum((addon.gb for addon in addons), start=_ZERO_DECIMAL)
+    total_sms = tariff.sms + sum((addon.sms for addon in addons), start=0)
+
+    billable_call_min, billable_sms, billable_data_gb = _compute_billable_home_usage(
+        usage, tariff
+    )
+
+    overage_minutes = max(0, billable_call_min - total_minutes)
+    overage_gb = max(_ZERO_DECIMAL, billable_data_gb - total_gb)
+    overage_sms = max(0, billable_sms - total_sms)
+
+    overage_cost = (
+        Decimal(overage_minutes) * tariff.overage.call
+        + overage_gb * tariff.overage.data
+        + Decimal(overage_sms) * tariff.overage.sms
+    )
+
+    roaming_cost = _compute_roaming_cost(usage, roaming_rates)
+    recurring_fee = tariff.fee + sum(
+        (addon.fee for addon in addons),
+        start=_ZERO_DECIMAL,
+    )
+
+    return recurring_fee + overage_cost + roaming_cost
 
 
 def _compute_roaming_cost(usage: MonthlyUsage, roaming_rates: Rates) -> Decimal:
@@ -233,6 +258,13 @@ def _validate_addons(addons: Sequence[Addon]) -> None:
         )
         raise BillingDomainError(reason, reason=reason)
 
+    for addon in addons:
+        _validate_decimal_non_negative(addon.fee, f"addon '{addon.id}' fee")
+        _validate_decimal_non_negative(addon.gb, f"addon '{addon.id}' gb")
+        if addon.minutes < 0 or addon.sms < 0:
+            reason = f"Addon '{addon.id}' minutes and sms quotas must be non-negative."
+            raise BillingDomainError(reason, reason=reason)
+
 
 def _validate_tariff(tariff: Tariff) -> None:
     """Ensure tariff fees, quotas, and overage rates are finite and non-negative."""
@@ -281,6 +313,6 @@ def _validate_billing_period(monthly_usages: Sequence[MonthlyUsage]) -> None:
     for usage in monthly_usages:
         _validate_monthly_usage(usage)
         if usage.month in seen_months:
-            reason = f"Duplicate billing month '{usage.month}' is usage period."
+            reason = f"Duplicate billing month '{usage.month}' in usage period."
             raise BillingDomainError(reason, reason=reason)
         seen_months.add(usage.month)
