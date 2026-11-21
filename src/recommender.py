@@ -94,6 +94,8 @@ def evaluate_recommendations(
         roaming_rates=tariffs_config.roaming_rates,
     )
 
+    baseline_total_3m = sum(baseline_monthly_costs.values(), start=_ZERO_DECIMAL)
+
     sorted_addons = tuple(sorted(addons, key=lambda addon: addon.id))
     addon_combos: list[tuple[Addon, ...]] = [
         combo
@@ -142,8 +144,9 @@ def evaluate_recommendations(
                     roaming_rates=tariffs_config.roaming_rates,
                 )
 
+            option_total_3m = sum(monthly_costs.values(), start=_ZERO_DECIMAL)
             raw_monthly_savings = baseline_avg_monthly - avg_monthly_cost
-            raw_net_savings_3m = raw_monthly_savings * _PERIOD_DECIMAL - switch_fee
+            raw_net_savings_3m = (baseline_total_3m - option_total_3m) - switch_fee
 
             candidate: CandidateTuple = (
                 avg_monthly_cost,
