@@ -25,6 +25,67 @@ EDGE_CASES_DIR: Path = DATA_DIR / "edge_cases"
 DEFAULT_MONTHS: tuple[str, str, str] = ("2026-08", "2026-09", "2026-10")
 
 
+@pytest.fixture
+def default_overage_rates() -> Rates:
+    """Return standard per-unit overage rates in KGS."""
+    return Rates(
+        call=Decimal("2"),
+        data=Decimal("50"),
+        sms=Decimal("1"),
+    )
+
+
+@pytest.fixture
+def default_roaming_rates() -> Rates:
+    """Return standard per-unit roaming rates in KGS."""
+    return Rates(
+        call=Decimal("30"),
+        data=Decimal("200"),
+        sms=Decimal("10"),
+    )
+
+
+@pytest.fixture
+def sample_catalog(
+    default_overage_rates: Rates,
+    default_roaming_rates: Rates,
+) -> tuple[TariffsConfig, tuple[Addon, ...]]:
+    """Return a minimal 3-tariff and 3-addon catalog for unit tests."""
+    tariffs_config = TariffsConfig(
+        currency="KGS",
+        tariffs=(
+            make_tariff("T01", "Start", fee="250", minutes=100, gb="10", sms=50),
+            make_tariff(
+                "T02",
+                "Night Pro",
+                fee="400",
+                minutes=200,
+                gb="15",
+                sms=100,
+                overage=Rates(Decimal("2"), Decimal("40"), Decimal("1")),
+                night_unlimited=True,
+            ),
+            make_tariff(
+                "T03",
+                "Maxi",
+                fee="600",
+                minutes=500,
+                gb="30",
+                sms=300,
+                overage=Rates(Decimal("1"), Decimal("30"), Decimal("1")),
+                night_unlimited=True,
+            ),
+        ),
+        roaming_rates=default_roaming_rates,
+    )
+    addons = (
+        make_addon("A01", "+5 GB", fee="100", gb="5"),
+        make_addon("A02", "+100 Min", fee="80", minutes=100),
+        make_addon("A03", "+50 SMS", fee="30", sms=50),
+    )
+    return tariffs_config, addons
+
+
 def make_tariff(
     tariff_id: str,
     name: str = "Plan",
