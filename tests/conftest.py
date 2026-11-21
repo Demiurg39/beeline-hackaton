@@ -170,3 +170,64 @@ def make_uniform_usages(
         for month in months
     ]
 
+
+def load_expected_map(expected_path: Path) -> dict[str, dict[str, Any]]:
+    """Load an expected.json file and normalize it into {subscriber_id: expected_dict}."""
+    raw = json.loads(expected_path.read_text(encoding="utf-8"))
+    if isinstance(raw, list):
+        return {item["id"]: item for item in raw}
+    if isinstance(raw, dict):
+        if "results" in raw and isinstance(raw["results"], list):
+            return {item["id"]: item for item in raw["results"]}
+        return raw
+    raise AssertionError(
+        f"Unsupported expected.json structure in {expected_path}: {type(raw)}"
+    )
+
+
+def assert_recommendation_matches(
+    actual: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    """Assert that a recommend() output dictionary matches the benchmark contract."""
+    sub_id = expected["id"]
+    assert actual["id"] == sub_id
+    assert actual["action"] == expected["action"], f"{sub_id}: action mismatch"
+    assert actual["tariff_id"] == expected["tariff_id"], f"{sub_id}: tariff_id mismatch"
+    assert actual["addon_ids"] == expected["addon_ids"], f"{sub_id}: addon_ids mismatch"
+
+    for money_field in (
+        "current_monthly_cost",
+        "new_monthly_cost",
+        "monthly_savings",
+        "switch_fee",
+        "net_savings_3m",
+    ):
+        if money_field in expected:
+            assert actual[money_field] == pytest.approx(
+                expected[money_field], abs=0.01
+            ), f"{sub_id}: mismatch in {money_field}"
+
+    if "monthly_costs" in expected:
+        assert set(actual["monthly_costs"].keys()) == set(
+            expected["monthly_costs"].keys()
+        )
+        for month, expected_cost in expected["monthly_costs"].items():
+            assert actual["monthly_costs"][month] == pytest.approx(
+                expected_cost, abs=0.01
+            ), f"{sub_id}: monthly_costs[{month}] mismatch"
+
+    if "consumption_on_recommended_tariff" in expected:
+        actual_details = actual["consumption_on_recommended_tariff"]
+        expected_details = expected["consumption_on_recommended_tariff"]
+        assert len(actual_details) == len(expected_details)
+
+        for act_item, exp_item in zip(actual_details, expected_details, strict=True):
+            assert act_item["month"] == exp_item["month"]
+            assert act_item["roaming_cost_som"] == pytest.approx(
+                exp_item["roaming_cost_som"], abs=0.01
+            )
+            for metric in ("call", "sms", "data"):
+                assert act_item["billable_usage"][metric] == pytest.approx(
+                    exp_item["billable_usage"][metric], abs=1e-4
+                ), f"{sub_id} ({exp_item['month']}): billable_usage.{metric} mismatch"
