@@ -9,6 +9,7 @@ the optimal recommendation for a subscriber.
 from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from itertools import combinations_with_replacement
+from typing import NamedTuple
 
 from src.calculator import (
     BILLING_PERIOD_MONTHS,
@@ -34,13 +35,41 @@ SWITCH_FEE_KGS: Decimal = Decimal(50)
 
 _MONEY_QUANTUM: Decimal = Decimal("0.01")
 _ZERO_DECIMAL: Decimal = Decimal(0)
-_PERIOD_DECIMAL: Decimal = Decimal(BILLING_PERIOD_MONTHS)
 
 
 __all__ = [
     "evaluate_recommendations",
     "recommend_tariff",
 ]
+
+
+class _EvaluatedCandidate(NamedTuple):
+    """Exact evaluation metrics for a single (tariff, add-ons) combination."""
+
+    avg_monthly_cost: Decimal
+    is_not_stay: int
+    addon_count: int
+    tariff_id: TariffId
+    addon_ids: list[AddonId]
+    tariff: Tariff
+    monthly_costs: dict[str, Decimal]
+    raw_monthly_savings: Decimal
+    switch_fee: Decimal
+    raw_net_savings_3m: Decimal
+
+    def rank_key(self) -> tuple[Decimal, int, int, TariffId, list[AddonId]]:
+        """Global ranking key enforcing billing tie-breaking rules."""
+        return (
+            self.avg_monthly_cost,
+            self.is_not_stay,
+            self.addon_count,
+            self.tariff_id,
+            self.addon_ids,
+        )
+
+    def per_tariff_key(self) -> tuple[Decimal, int, list[AddonId]]:
+        """Ranking key for selecting the best add-on set within a single tariff."""
+        return (self.avg_monthly_cost, self.addon_count, self.addon_ids)
 
 
 def evaluate_recommendations(
@@ -93,7 +122,6 @@ def evaluate_recommendations(
         addons=(),
         roaming_rates=tariffs_config.roaming_rates,
     )
-
     baseline_total_3m = sum(baseline_monthly_costs.values(), start=_ZERO_DECIMAL)
 
     sorted_addons = tuple(sorted(addons, key=lambda addon: addon.id))
@@ -103,31 +131,14 @@ def evaluate_recommendations(
         for combo in combinations_with_replacement(sorted_addons, count)
     ]
 
-    # Evaluated candidate tuple:
-    # (avg_monthly_cost, is_not_stay, addon_count, tariff_id, addon_ids,
-    #  tariff, monthly_costs, raw_monthly_savings, switch_fee, raw_net_savings_3m)
-    CandidateTuple = tuple[
-        Decimal,
-        int,
-        int,
-        TariffId,
-        list[AddonId],
-        Tariff,
-        dict[str, Decimal],
-        Decimal,
-        Decimal,
-        Decimal,
-    ]
-
-    eligible_candidates: list[CandidateTuple] = []
+    eligible_candidates: list[_EvaluatedCandidate] = []
     comparison_items: list[TariffComparisonItem] = []
 
     for tariff in tariffs_config.tariffs:
         is_same_tariff = tariff.id == subscriber.current_tariff_id
         switch_fee = _ZERO_DECIMAL if is_same_tariff else SWITCH_FEE_KGS
 
-        best_for_tariff: CandidateTuple | None = None
-        best_for_tariff_key: tuple[Decimal, int, list[AddonId]] | None = None
+        best_for_tariff: _EvaluatedCandidate | None = None
 
         for combo in addon_combos:
             addon_ids: list[AddonId] = [addon.id for addon in combo]
@@ -148,22 +159,23 @@ def evaluate_recommendations(
             raw_monthly_savings = baseline_avg_monthly - avg_monthly_cost
             raw_net_savings_3m = (baseline_total_3m - option_total_3m) - switch_fee
 
-            candidate: CandidateTuple = (
-                avg_monthly_cost,
-                0 if is_stay_option else 1,
-                len(addon_ids),
-                tariff.id,
-                addon_ids,
-                tariff,
-                monthly_costs,
-                raw_monthly_savings,
-                switch_fee,
-                raw_net_savings_3m,
+            candidate = _EvaluatedCandidate(
+                avg_monthly_cost=avg_monthly_cost,
+                is_not_stay=0 if is_stay_option else 1,
+                addon_count=len(addon_ids),
+                tariff_id=tariff.id,
+                addon_ids=addon_ids,
+                tariff=tariff,
+                monthly_costs=monthly_costs,
+                raw_monthly_savings=raw_monthly_savings,
+                switch_fee=switch_fee,
+                raw_net_savings_3m=raw_net_savings_3m,
             )
 
-            per_tariff_key = (avg_monthly_cost, len(addon_ids), addon_ids)
-            if best_for_tariff_key is None or per_tariff_key < best_for_tariff_key:
-                best_for_tariff_key = per_tariff_key
+            if (
+                best_for_tariff is None
+                or candidate.per_tariff_key() < best_for_tariff.per_tariff_key()
+            ):
                 best_for_tariff = candidate
 
             if _is_eligible_option(
@@ -175,72 +187,46 @@ def evaluate_recommendations(
                 eligible_candidates.append(candidate)
 
         if best_for_tariff is not None:
-            (
-                best_avg_cost,
-                _,
-                _,
-                _,
-                best_addon_ids,
-                _,
-                _,
-                _,
-                _,
-                best_raw_net_savings_3m,
-            ) = best_for_tariff
             comparison_items.append(
                 TariffComparisonItem(
                     tariff_id=tariff.id,
                     tariff_name=tariff.name,
-                    addon_ids=best_addon_ids,
-                    avg_monthly_cost=_round_money(best_avg_cost),
-                    net_savings_3m=_round_money(best_raw_net_savings_3m),
-                    is_profitable=best_raw_net_savings_3m > _ZERO_DECIMAL,
+                    addon_ids=best_for_tariff.addon_ids,
+                    avg_monthly_cost=_round_money(best_for_tariff.avg_monthly_cost),
+                    net_savings_3m=_round_money(best_for_tariff.raw_net_savings_3m),
+                    is_profitable=best_for_tariff.raw_net_savings_3m > _ZERO_DECIMAL,
                 )
             )
-    winner = min(
-        eligible_candidates,
-        key=lambda item: (item[0], item[1], item[2], item[3], item[4]),
-    )
-    (
-        win_avg_cost,
-        _,
-        _,
-        win_tariff_id,
-        win_addon_ids,
-        win_tariff,
-        win_monthly_costs,
-        win_raw_monthly_savings,
-        win_switch_fee,
-        win_raw_net_savings_3m,
-    ) = winner
+
+    winner = min(eligible_candidates, key=lambda item: item.rank_key())
 
     action = _resolve_action(
         current_tariff_id=subscriber.current_tariff_id,
-        recommended_tariff_id=win_tariff_id,
-        addon_count=len(win_addon_ids),
+        recommended_tariff_id=winner.tariff_id,
+        addon_count=winner.addon_count,
     )
 
     consumption_details = build_consumption_details(
         monthly_usages=monthly_usages,
-        tariff=win_tariff,
+        tariff=winner.tariff,
         roaming_rates=tariffs_config.roaming_rates,
     )
 
     rounded_monthly_costs: dict[str, float] = {
-        usage.month: _round_money(win_monthly_costs[usage.month])
+        usage.month: _round_money(winner.monthly_costs[usage.month])
         for usage in monthly_usages
     }
 
     recommendation = RecommendationResult(
         id=subscriber.id,
         action=action,
-        tariff_id=win_tariff_id,
-        addon_ids=win_addon_ids,
+        tariff_id=winner.tariff_id,
+        addon_ids=winner.addon_ids,
         current_monthly_cost=_round_money(baseline_avg_monthly),
-        new_monthly_cost=_round_money(win_avg_cost),
-        monthly_savings=_round_money(win_raw_monthly_savings),
-        switch_fee=_round_money(win_switch_fee),
-        net_savings_3m=_round_money(win_raw_net_savings_3m),
+        new_monthly_cost=_round_money(winner.avg_monthly_cost),
+        monthly_savings=_round_money(winner.raw_monthly_savings),
+        switch_fee=_round_money(winner.switch_fee),
+        net_savings_3m=_round_money(winner.raw_net_savings_3m),
         monthly_costs=rounded_monthly_costs,
         consumption_on_recommended_tariff=consumption_details,
     )
@@ -283,7 +269,8 @@ def recommend_tariff(
 
 def _round_money(value: Decimal) -> float:
     """Round an exact ``Decimal`` amount to 0.01 KGS using ``ROUND_HALF_UP``."""
-    return float(value.quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP))
+    quantized = value.quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+    return 0.0 if quantized == _ZERO_DECIMAL else float(quantized)
 
 
 def _resolve_action(
